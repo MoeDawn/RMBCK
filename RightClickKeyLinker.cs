@@ -12,9 +12,9 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("右键长按联动器")]
 [assembly: AssemblyTitle("千恋万花安装器(反MC)")]
 [assembly: AssemblyDescription("千恋万花安装器(反MC)")]
-[assembly: AssemblyVersion("1.0.1")]
-[assembly: AssemblyFileVersion("1.0.1")]
-[assembly: AssemblyInformationalVersion("1.0.1")]
+[assembly: AssemblyVersion("1.1.0")]
+[assembly: AssemblyFileVersion("1.1.0")]
+[assembly: AssemblyInformationalVersion("1.1.0")]
 
 class Program
 {
@@ -538,6 +538,9 @@ class SendInputKeySender : IKeySender
     [DllImport("user32.dll", SetLastError = true)]
     static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
+    // 复用缓冲（仅 UI 线程调用，无竞争）；InputStructSize 供测试校验结构布局
+    readonly INPUT[] _sendBuf = new INPUT[1];
+
     void SendKey(int vk, bool up)
     {
         var inp = new INPUT();
@@ -545,7 +548,8 @@ class SendInputKeySender : IKeySender
         inp.U.ki.wVk = (ushort)vk;
         inp.U.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
         inp.U.ki.dwExtraInfo = IntPtr.Zero;
-        SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
+        _sendBuf[0] = inp;
+        SendInput(1, _sendBuf, Marshal.SizeOf(typeof(INPUT)));
     }
 
     public void KeyDown(int vk) { SendKey(vk, false); }
@@ -659,33 +663,35 @@ class MainForm : Form
         int hs = 54;
         if (_headerFrames.Length > 0)
             g.DrawImage(_headerFrames[_headerFrameIndex], new Rectangle(18, (hs - 28) / 2, 28, 28));
-        else if (_headerIcon != null)
-            g.DrawImage(_headerIcon, new Rectangle(18, (hs - 28) / 2, 28, 28));
-        string title = "RMB * Keybind";
-        Font titleFont = new Font(Font.FontFamily, 13.5f, FontStyle.Bold);
-        Size titleSz = TextRenderer.MeasureText(title, titleFont);
-        using (var titleBrush = new LinearGradientBrush(new Rectangle(60, 10, titleSz.Width + 4, 34), Theme.GradPink, Theme.GradViolet, 0f))
-            g.DrawString(title, titleFont, titleBrush, 60, 12);
+        // 头部标题/尺寸/版本串缓存为字段（每次重绘 new Font + 2 次 MeasureText 持续分配，Font 还是泄漏源）
+        if (_titleFont == null)
+        {
+            _titleFont = new Font(Font.FontFamily, 13.5f, FontStyle.Bold);
+            _titleSz = TextRenderer.MeasureText("RMB * Keybind", _titleFont);
+            _versionText = "v" + Application.ProductVersion;
+            _versionH = TextRenderer.MeasureText(_versionText, Font).Height;
+        }
+        using (var titleBrush = new LinearGradientBrush(new Rectangle(60, 10, _titleSz.Width + 4, 34), Theme.GradPink, Theme.GradViolet, 0f))
+            g.DrawString("RMB * Keybind", _titleFont, titleBrush, 60, 12);
         // 版本号紧跟标题（避开右上角窗控按钮）
-        TextRenderer.DrawText(g, "v" + Application.ProductVersion, Font,
-            new Point(60 + titleSz.Width + 10, (hs - tagH(Font)) / 2), Theme.TextSub);
+        TextRenderer.DrawText(g, _versionText, Font,
+            new Point(60 + _titleSz.Width + 10, (hs - _versionH) / 2), Theme.TextSub);
         using (var penBrush = new LinearGradientBrush(new Rectangle(14, hs - 2, ClientSize.Width - 28, 2), Theme.GradPink, Theme.GradViolet, 0f))
         using (Pen pen = new Pen(penBrush, 1.6f))
             g.DrawLine(pen, 14, hs - 2, ClientSize.Width - 14, hs - 2);
     }
 
-    Image _headerIcon;
+    Font _titleFont;
+    Size _titleSz;
+    string _versionText;
+    int _versionH;
 
-    // 头部 logo 帧动画：多帧时循环切换，单帧/无帧退回静态 _headerIcon；任务栏/窗口图标不参与
+    // 头部 logo 帧动画：多帧时循环切换；任务栏/窗口图标不参与
     Image[] _headerFrames = new Image[0];
     int _headerFrameIndex;
     Timer _headerAnimTimer;
     const int HeaderFrameMs = 3000;   // 帧间隔
-
-    int tagH(Font f)
-    {
-        return TextRenderer.MeasureText("v1.0.1", f).Height;
-    }
+    static readonly Rectangle HeaderLogoRect = new Rectangle(18, 13, 28, 28);   // 头部 logo 绘制区（动画定向失效用）
 
     // 强制刷新整张卡及其子控件（DLP 首绘黑框 workaround：等价于鼠标掠过触发的重绘）
     static void RefreshCard(BorderBox card)
@@ -699,7 +705,10 @@ class MainForm : Form
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
+        Region old = Region;
         Region = new Region(Ui.RoundedPath(new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), 16));
+        if (old != null) old.Dispose();   // Region 每次赋值都新建，旧的必须释放（防 GDI 泄漏）
+        Ui.InvalidateBackdropCache();
         Invalidate();
     }
 
@@ -730,14 +739,6 @@ class MainForm : Form
             }
         }
         catch { }
-        try
-        {
-            using (Stream s = typeof(MainForm).Assembly.GetManifestResourceStream("RMBKeyLinker.icon.png"))
-            {
-                if (s != null) _headerIcon = Image.FromStream(s);
-            }
-        }
-        catch { _headerIcon = null; }
         // 帧动画：内嵌资源 iconf1.png, iconf2.png, ... 依次加载，≥2 帧才启动定时器（任务栏/窗口图标不参与切换）
         try
         {
@@ -755,7 +756,8 @@ class MainForm : Form
                 _headerAnimTimer.Tick += (s, e) =>
                 {
                     _headerFrameIndex = (_headerFrameIndex + 1) % _headerFrames.Length;
-                    Invalidate(); Update();   // DLP 环境下强制同步重绘
+                    // 定向失效：只刷头部 28x28 logo 区域（原全窗 Invalidate+Update 每 3 秒强制整窗重绘）
+                    Invalidate(HeaderLogoRect); Update();
                 };
                 _headerAnimTimer.Start();
             }
@@ -764,19 +766,15 @@ class MainForm : Form
         Shown += (s, e) =>
         {
             TopMost = true; Activate(); TopMost = false;
-            // 强制自绘控件立即重绘（本机 DLP 环境下自动重绘不可靠），并确保首次显示即应用主题
+            // 强制自绘控件立即重绘（DLP 环境下自动重绘不可靠）。卡内按钮由卡的 Invalidate(true) 覆盖，
+            // 无需逐个 Refresh（原 ~17 个按钮逐个同步重绘是启动卡顿的一部分）
             Invalidate(true); Update();
-            _btnMin.Refresh(); _btnClose.Refresh();
-            _addBtn.Refresh(); _delBtn.Refresh(); _testBtn.Refresh(); _browseBtn.Refresh(); _toggleBtn.Refresh();
-            _procRefresh.Refresh(); _procClear.Refresh(); _profileNew.Refresh(); _profileDel.Refresh();
-            _modCtrl.Refresh(); _modShift.Refresh(); _modAlt.Refresh(); _modWin.Refresh();
-            _jitterBtn.Refresh();
-            // 分区卡强制重绘（DLP 首绘不可靠，不刷会残留直角黑框）
+            _btnMin.Refresh(); _btnClose.Refresh();   // 窗控按钮在窗体头部，卡覆盖不到
             RefreshCard(_cardTop); RefreshCard(_cardKey); RefreshCard(_cardTest); RefreshCard(_cardBottom);
             _inputCard.Refresh(); _cfgCard.Refresh();   // 原生 Panel 系统自绘，Refresh 仅兜底
             _grid.Refresh();   // DataGridView 对 Invalidate(true) 不敏感，需显式 Refresh（否则表格区域残留黑块）
             _thresholdSlider.Refresh();
-            PopulateProcesses();   // 窗口显示后重新填充（此时自身进程已有主窗口句柄，可被列出）；构造期 LoadSettingsToUi 已填过一次，这里保证目标项可恢复选中
+            PopulateProcesses();   // 窗口显示后异步填充（线程池枚举，UI 不冻结）
             PopulateProfileCombo();
             ApplyLinkageGate();
         };
@@ -1142,17 +1140,13 @@ class MainForm : Form
         };
         _procCombo.DrawItem += (s, e) =>
         {
-            e.DrawBackground();
             if (e.Index >= 0 && e.Index < _procCombo.Items.Count)
             {
                 ProcessItem item = _procCombo.Items[e.Index] as ProcessItem;
                 if (item != null)
                 {
-                    if ((e.State & DrawItemState.Selected) != 0)
-                    {
-                        using (SolidBrush sel = new SolidBrush(Theme.Sel))
-                            e.Graphics.FillRectangle(sel, e.Bounds);
-                    }
+                    using (SolidBrush bg = new SolidBrush((e.State & DrawItemState.Selected) != 0 ? Theme.Sel : Theme.Card))
+                        e.Graphics.FillRectangle(bg, e.Bounds);   // 一遍画底（原 DrawBackground+FillRectangle 画两遍）
                     TextRenderer.DrawText(e.Graphics, item.Display, e.Font, e.Bounds, Theme.Text,
                         TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
                 }
@@ -1254,35 +1248,63 @@ class MainForm : Form
         _jitterBtn.Refresh();
     }
 
+    // 进程枚举昂贵（GetProcesses + 每进程窗口标题查询，100ms~2s），必须移出 UI 线程：
+    // 线程池收集 → BeginInvoke 回传；代数计数丢弃过期结果（刷新与切方案竞态）
+    int _procGen;
+
     void PopulateProcesses()
     {
-        _loading = true;   // 防止 Items.Clear()/恢复选中期间触发 SelectedIndexChanged 清空 TargetProcess 并误写盘
+        int gen = ++_procGen;
+        string sel = _settings.TargetProcess;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
+        {
+            List<ProcessItem> list = CollectProcesses();
+            BeginInvoke((MethodInvoker)delegate
+            {
+                if (gen != _procGen || IsDisposed) return;
+                ApplyProcessList(list, sel);
+            });
+        });
+    }
+
+    static List<ProcessItem> CollectProcesses()
+    {
+        var list = new List<ProcessItem>();
+        System.Diagnostics.Process[] procs = null;
+        try { procs = System.Diagnostics.Process.GetProcesses(); }
+        catch { return list; }
+        foreach (System.Diagnostics.Process p in procs)
+        {
+            try
+            {
+                if (p.MainWindowHandle != IntPtr.Zero && !string.IsNullOrEmpty(p.MainWindowTitle))
+                    list.Add(new ProcessItem { Name = p.ProcessName, Display = p.ProcessName + " — " + p.MainWindowTitle });
+            }
+            catch { }
+            finally { try { p.Dispose(); } catch { } }
+        }
+        list.Sort(delegate(ProcessItem a, ProcessItem b) { return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase); });
+        return list;
+    }
+
+    void ApplyProcessList(List<ProcessItem> list, string sel)
+    {
+        _loading = true;
         try
         {
-            _procCombo.Items.Clear();
-            string sel = _settings.TargetProcess;
-            int selIndex = -1;
-            System.Diagnostics.Process[] procs = null;
-            try { procs = System.Diagnostics.Process.GetProcesses(); }
-            catch { return; }
-            var list = new List<ProcessItem>();
-            foreach (System.Diagnostics.Process p in procs)
+            _procCombo.BeginUpdate();   // 批量填充免逐条重绘
+            try
             {
-                try
+                _procCombo.Items.Clear();
+                int selIndex = -1;
+                for (int i = 0; i < list.Count; i++)
                 {
-                    if (p.MainWindowHandle != IntPtr.Zero && !string.IsNullOrEmpty(p.MainWindowTitle))
-                        list.Add(new ProcessItem { Name = p.ProcessName, Display = p.ProcessName + " — " + p.MainWindowTitle });
+                    _procCombo.Items.Add(list[i]);
+                    if (string.Equals(list[i].Name, sel, StringComparison.OrdinalIgnoreCase)) selIndex = i;
                 }
-                catch { }
-                finally { try { p.Dispose(); } catch { } }
+                if (selIndex >= 0) _procCombo.SelectedIndex = selIndex;
             }
-            list.Sort(delegate(ProcessItem a, ProcessItem b) { return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase); });
-            for (int i = 0; i < list.Count; i++)
-            {
-                _procCombo.Items.Add(list[i]);
-                if (string.Equals(list[i].Name, sel, StringComparison.OrdinalIgnoreCase)) selIndex = i;
-            }
-            if (selIndex >= 0) _procCombo.SelectedIndex = selIndex;
+            finally { _procCombo.EndUpdate(); }
         }
         finally { _loading = false; }
     }
@@ -1307,7 +1329,7 @@ class MainForm : Form
         if (!on)
         {
             _headerFrameIndex = 0;
-            Invalidate(); Update();
+            Invalidate(HeaderLogoRect); Update();
         }
         _animBtn.Checked = on;
         _animBtn.Text = on ? "动态图标:开" : "动态图标:关";
@@ -1462,13 +1484,15 @@ class MainForm : Form
 
     void SwitchProfile(string name)
     {
-        SaveSettings();
+        SaveSettingsNow();
         LoadProfileInto(name);
     }
 
     // 仅加载指定方案（用于切换与删除后的跳转，不触发保存）
     void LoadProfileInto(string name)
     {
+        if (_saveTimer != null) _saveTimer.Stop();   // 丢弃挂起的防抖写
+        _saveDirty = false;
         _settings.Profile = name;
         AppSettings loaded = ConfigStore.LoadProfile(Path.Combine(ProfileDir(), name + ".ini"));
         _settings.LongPressMs = loaded.LongPressMs;
@@ -1507,7 +1531,7 @@ class MainForm : Form
             MessageBox.Show("已存在同名方案：" + name, "右键长按联动器", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        SaveSettings();
+        SaveSettingsNow();   // 同步落盘旧方案后再建新方案
         _settings.Profile = name;
         try
         {
@@ -1605,6 +1629,7 @@ class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        SaveSettingsNow();   // 关窗（含最小化）前同步落盘，防抖静默期数据不丢
         if (_exiting) { base.OnFormClosing(e); return; }
         e.Cancel = true;
         if (_settings.CloseAction == "Minimize") MinimizeToTray();
@@ -1628,6 +1653,9 @@ class MainForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         try { if (_headerAnimTimer != null) { _headerAnimTimer.Stop(); _headerAnimTimer.Dispose(); } } catch { }
+        try { if (_saveTimer != null) { _saveTimer.Stop(); _saveTimer.Dispose(); } } catch { }
+        Ui.InvalidateBackdropCache();
+        try { if (_titleFont != null) _titleFont.Dispose(); } catch { }
         try { if (_tray != null) { _tray.Visible = false; _tray.Dispose(); } } catch { }
         try { if (_trayIcon != null) _trayIcon.Dispose(); } catch { }
         try { UnregisterHotKey(Handle, HotkeyId); } catch { }
@@ -1639,7 +1667,9 @@ class MainForm : Form
     {
         base.OnHandleCreated(e);
         // 句柄创建后圆角 Region 才真正生效（此前赋值被忽略，首显时系统画直角背景 → 顶部黑线）
+        Region oldHc = Region;
         Region = new Region(Ui.RoundedPath(new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), 16));
+        if (oldHc != null) oldHc.Dispose();
         try { RegisterHotKey(Handle, HotkeyId, HotkeyMod, HotkeyVk); } catch { }
     }
 
@@ -1806,8 +1836,28 @@ class MainForm : Form
         catch { }
     }
 
+    // 保存防抖：滑块拖动/频繁开关合并为一次写盘（500ms 静默期）。
+    // 切方案/新建方案/关窗必须同步落盘（SaveSettingsNow），防止挂起请求把旧方案数据写到新方案文件
+    Timer _saveTimer;
+    bool _saveDirty;
+
     void SaveSettings()
     {
+        _saveDirty = true;
+        if (_saveTimer == null)
+        {
+            _saveTimer = new Timer { Interval = 500 };
+            _saveTimer.Tick += (s, e) => { _saveTimer.Stop(); if (_saveDirty) SaveSettingsNow(); };
+        }
+        _saveTimer.Stop();
+        _saveTimer.Start();
+        _ctrl.SetThreshold(_thresholdSlider.Value);   // 阈值实时生效不等落盘
+    }
+
+    void SaveSettingsNow()
+    {
+        if (_saveTimer != null) _saveTimer.Stop();
+        _saveDirty = false;
         _settings.Keys.Clear();
         foreach (DataGridViewRow row in _grid.Rows)
         {
@@ -1947,41 +1997,32 @@ class EggItem
 }
 
 // 提示 Toast：屏幕右上角显示后自动消失，不抢焦点、不阻塞游戏（热键开关 / 目标进程切换共用；含彩蛋整蛊列表）
-class ToastForm : Form
+// LayeredForm 逐像素透明：背景全透，只留玻璃卡+文字悬浮（与 HUD 同一渲染路径，绕过 WM_PAINT/免 DLP 强刷）
+class ToastForm : LayeredForm
 {
-    Label _label;
-    PictureBox _icon;
-    Timer _timer, _loadingTimer, _eggTimer, _fadeTimer;
+    Timer _timer, _loadingTimer, _eggTimer, _cursorTimer;
     Image _iconImg;
-    Font _eggFont, _eggSmallFont;
+    Font _toastFont, _eggFont;
     int _loadingDots;
     EggItem[] _eggItems;
     bool _eggActive;
     int _eggLineH;
     int _eggLineStep;
     int _eggCurLine, _eggCurChar, _eggPhase, _eggPhaseCount;
-    int _eggDots, _eggDotTicks;   // 当前行已显示的点数（0-3）与每点间隔 tick 数
-    bool _eggMarkShown, _eggTailShown, _eggNoteShown;
+    int _eggDots, _eggDotTicks;
     const int EggTypeMs = 40;        // 逐字显示速度
     const int EggPauseCount = 6;     // 行间停顿（约 240ms）
     const int EggMarkDelayMs = 700;  // 标记前摇默认（模拟加载耗时）
-    const int EggTopStrip = 32;      // 顶部保留条高度（图标 + 版本号）
+    const int EggTop = 8;    // 顶部留白（原顶部条已删）
     const int EggLeftPad = 18;
     const int EggRightPad = 16;
+    const int EggRadius = 14;
+    bool _cursorOn = true;
 
     public ToastForm()
     {
-        Text = "";
-        FormBorderStyle = FormBorderStyle.None;
-        ShowInTaskbar = false;
-        TopMost = true;
-        StartPosition = FormStartPosition.Manual;
-        BackColor = Theme.Bg;
-        AutoSize = false;
-        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
-            | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-        _eggFont = new Font(Font.FontFamily, 8.5f);
-        _eggSmallFont = new Font(Font.FontFamily, 8.5f);
+        _toastFont = new Font(Font.FontFamily, 11f, FontStyle.Bold);
+        _eggFont = new Font(Font.FontFamily, 12f, FontStyle.Bold);   // 加粗加大：透明画布上抗锯齿文字必须有足够笔划密度才清晰
         try
         {
             using (Stream s = typeof(ToastForm).Assembly.GetManifestResourceStream("RMBKeyLinker.icon.png"))
@@ -1990,9 +2031,6 @@ class ToastForm : Form
             }
         }
         catch { _iconImg = null; }
-        _icon = new PictureBox { Image = _iconImg, SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(22, 22), BackColor = Color.Transparent };
-        Controls.Add(_icon);
-        _label = new Label { Text = "", AutoSize = true, ForeColor = Theme.Btn, Font = new Font(Font.FontFamily, 11f, FontStyle.Bold), BackColor = Color.Transparent };        Controls.Add(_label);
         _timer = new Timer { Interval = 500 };
         _timer.Tick += TimerHideTick;
         _loadingTimer = new Timer { Interval = 1000 };
@@ -2000,102 +2038,121 @@ class ToastForm : Form
         _eggTimer = new Timer { Interval = EggTypeMs };
         _eggTimer.Tick += (s, e) => EggTick();
         _cursorTimer = new Timer { Interval = 450 };
-        _cursorTimer.Tick += (s, e) => { _cursorOn = !_cursorOn; if (_eggActive) ForceRepaint(); };
+        _cursorTimer.Tick += (s, e) => CursorTick();
     }
 
-    Timer _cursorTimer;
-    bool _cursorOn = true;
-    double _eggOpacity = 1.0;
-
-    // 强制整窗同步重绘：本机 DLP 环境自动重绘不可靠
-    void ForceRepaint()
+    void StopAllTimers()
     {
-        Invalidate(true);
-        Update();
+        _loadingTimer.Stop();
+        _eggTimer.Stop();
+        _cursorTimer.Stop();
+        _timer.Stop();
+        StopFade();
     }
 
-    // _timer 到时：普通提示直接隐藏；彩蛋先淡出再隐藏（科技感）
+    // _timer 到时：普通提示直接隐藏；彩蛋淡出后隐藏
     void TimerHideTick(object sender, EventArgs e)
     {
         _timer.Stop();
         if (!_eggActive) { Hide(); return; }
-        if (_fadeTimer == null)
+        FadeOut(260, 30, delegate { _eggActive = false; });
+    }
+
+    void DrawGlassCard(Graphics g, int w, int h)
+    {
+        using (GraphicsPath body = Ui.RoundedPath(new Rectangle(0, 0, w - 1, h - 1), EggRadius))
         {
-            _fadeTimer = new Timer { Interval = 30 };
-            _fadeTimer.Tick += (s2, e2) =>
-            {
-                _eggOpacity -= 0.12;
-                if (_eggOpacity <= 0)
-                {
-                    _fadeTimer.Stop();
-                    Hide();
-                    Opacity = 1.0; _eggOpacity = 1.0;
-                    return;
-                }
-                Opacity = _eggOpacity;
-            };
+            using (SolidBrush b = new SolidBrush(Theme.GlassCard))
+                g.FillPath(b, body);
+            using (GraphicsPath hi = Ui.RoundedPath(new Rectangle(1, 1, w - 2, h / 2), EggRadius))
+            using (Pen hp = new Pen(Theme.GlassCardHi, 1.4f))
+                g.DrawPath(hp, hi);
+            using (var gb = new LinearGradientBrush(new Rectangle(0, 0, w, h), Theme.GradPink, Theme.GradViolet, 45f))
+            using (Pen gp = new Pen(gb, 1.4f))
+                g.DrawPath(gp, body);
         }
-        _fadeTimer.Start();
     }
 
     public void ShowToast(string text, int durationMs)
     {
-        _loadingTimer.Stop();
-        _eggTimer.Stop();
-        _cursorTimer.Stop();
-        if (_fadeTimer != null) _fadeTimer.Stop();
-        Opacity = 1.0; _eggOpacity = 1.0;
+        StopAllTimers();
         _eggActive = false;
-        _label.Visible = true;
-        _label.Text = text;
-        _label.AutoSize = true;
-        _icon.Visible = (_iconImg != null);
-        Size sz = TextRenderer.MeasureText(text, _label.Font);
-        int iconW = (_iconImg != null) ? 22 + 8 : 0;   // 图标宽 + 间距
-        Width = sz.Width + iconW + 44;
-        Height = sz.Height + 24;
-        if (_iconImg != null) _icon.Location = new Point(14, (Height - 22) / 2);
-        _label.Location = new Point(14 + iconW + 2, (Height - sz.Height) / 2);
-        ApplyRegion();
-        PositionToast();
+        SizeF sz = MeasureG(text, _toastFont);
+        int iconW = (_iconImg != null) ? 22 + 8 : 0;
+        int w = (int)sz.Width + iconW + 44;
+        int h = (int)sz.Height + 24;
+        EnsureSurface(w, h);
+        DrawGlassCard(_cg, w, h);
+        if (_iconImg != null) _cg.DrawImage(_iconImg, new Rectangle(14, (h - 22) / 2, 22, 22));
+        using (SolidBrush tb = new SolidBrush(Theme.Btn))
+            _cg.DrawString(text, _toastFont, tb, 14 + iconW + 2, (h - sz.Height) / 2, StringFormat.GenericTypographic);
+        PositionToast(w, h);
+        if (!Visible) Show();
+        Push(255);
         _timer.Interval = durationMs;
-        Show();
         _timer.Stop(); _timer.Start();
-        ForceRepaint();
     }
+
+    void PositionToast(int w, int h)
+    {
+        var wa = Screen.PrimaryScreen.WorkingArea;
+        Location = new Point(wa.Right - w - 12, wa.Top + 12);
+        Width = w; Height = h;
+    }
+
+    static SizeF MeasureG(string text, Font font)
+    {
+        using (Bitmap m = new Bitmap(1, 1))
+        using (Graphics mg = Graphics.FromImage(m))
+            return mg.MeasureString(text, font, PointF.Empty, StringFormat.GenericTypographic);
+    }
+
+    // ==== 彩蛋（全量重画方案）：窗口一次定最终尺寸，每帧在干净画布上重画当前状态 ====
+    // 之前增量绘制方案的叠画/错位问题太多；全量每帧 ~60 次 DrawString 实测 <3ms，25fps 无压力
+    int _eggW, _eggH;   // 最终窗口尺寸（StartEggList 一次算好）
 
     public void ShowEasterEgg(EggItem[] items)
     {
-        _timer.Stop();
-        _loadingTimer.Stop();
-        _eggTimer.Stop();
-        _cursorTimer.Stop();
-        if (_fadeTimer != null) _fadeTimer.Stop();
-        Opacity = 1.0; _eggOpacity = 1.0;
+        StopAllTimers();
         _eggActive = false;
         _eggItems = items;
         _loadingDots = 0;
-        _icon.Visible = false;
-        _label.Visible = true;
-        _label.AutoSize = false;
-        // 假加载阶段：按"🚀 超级外挂加载中..."最大宽度定尺寸，加点号时无需改尺寸
-        Size sz = TextRenderer.MeasureText("🚀 超级外挂加载中...", _label.Font);
-        int w0 = sz.Width + 44;
-        _label.Width = w0 - 44;
-        _label.Location = new Point(22, 12);
-        _label.Height = TextRenderer.MeasureText("超级外挂加载中", _label.Font).Height + 4;
-        _label.Text = "🚀 超级外挂加载中";
-        Width = w0;
-        Height = _label.Height + 24;
-        ApplyRegion();
-        PositionToast();
-        Show();
-        ForceRepaint();
+        // 假加载阶段：直接用最终尺寸建窗（列表阶段不再换尺寸，杜绝过渡残影）
+        ComputeEggSize();
+        PositionToast(_eggW, _eggH);
+        if (!Visible) Show();
+        RenderEggLoading();
         _loadingTimer.Interval = 1000;
         _loadingTimer.Start();
     }
 
-    // 假加载：每秒加一个点，加到 3 个点后切到列表
+    // 最终尺寸一次算好：宽=最长行，高=全部行+顶部条（画布全透明，下方没画到的地方视觉上就是"没长出来"）
+    void ComputeEggSize()
+    {
+        _eggLineH = (int)MeasureG("A", _eggFont).Height;
+        _eggLineStep = _eggLineH + 2;
+        int maxW = 0;
+        foreach (EggItem it in _eggItems)
+        {
+            int w = (int)MeasureG(FullItemText(it), _eggFont).Width;
+            if (w > maxW) maxW = w;
+        }
+        SizeF ld = MeasureG("🚀 超级外挂加载中...", _toastFont);
+        if (ld.Width + 44 > maxW) maxW = (int)ld.Width + 44;
+        _eggW = maxW + EggLeftPad + EggRightPad;
+        _eggH = EggTop + _eggItems.Length * _eggLineStep + 8;
+    }
+
+    // 假加载帧：全量重画——无卡、纯文字
+    void RenderEggLoading()
+    {
+        EnsureSurface(_eggW, _eggH);
+        string txt = "🚀 超级外挂加载中" + new string('.', Math.Min(_loadingDots, 3));
+        using (SolidBrush tb = new SolidBrush(Theme.Btn))
+            _cg.DrawString(txt, _toastFont, tb, 22, 12, StringFormat.GenericTypographic);
+        Push(255);
+    }
+
     void LoadingTick()
     {
         _loadingDots++;
@@ -2105,36 +2162,21 @@ class ToastForm : Form
             StartEggList();
             return;
         }
-        _label.Text = "🚀 超级外挂加载中" + new string('.', _loadingDots);
-        ForceRepaint();
+        RenderEggLoading();
     }
 
     void StartEggList()
     {
-        _label.Visible = false;
         _eggActive = true;
-        _eggLineH = TextRenderer.MeasureText("A", _eggFont).Height;
-        _eggLineStep = _eggLineH + 2;
-        int maxW = 0;
-        foreach (EggItem it in _eggItems)
-        {
-            int w = TextRenderer.MeasureText(FullItemText(it), _eggFont).Width;
-            if (w > maxW) maxW = w;
-        }
-        Width = maxW + EggLeftPad + EggRightPad;
-        Height = EggTopStrip + 1 * _eggLineStep + 12;
         _eggCurLine = 0; _eggCurChar = 0; _eggPhase = 0; _eggPhaseCount = 0;
-        _eggMarkShown = false; _eggTailShown = false; _eggNoteShown = false;
         _eggDots = 0; _eggDotTicks = 0;
-        ApplyRegion();
-        PositionToast();
+        RenderEggFrame();
         _eggTimer.Interval = EggTypeMs;
         _eggTimer.Start();
         _cursorTimer.Start();
-        ForceRepaint();
     }
 
-    // 彩蛋推进：0=打字 1=点号 2=标记前摇 3=尾部前摇 4=行间停顿；只在内容变化时重绘（减少闪烁）
+    // 彩蛋推进：0=打字 1=点号 2=标记前摇 3=尾部前摇 4=行间停顿（纯状态推进，绘制全在 RenderEggFrame）
     void EggTick()
     {
         if (!_eggActive) return;
@@ -2142,10 +2184,7 @@ class ToastForm : Form
         {
             _eggTimer.Stop();
             _cursorTimer.Stop();
-            // 停留 2.2 秒后淡出消失（科技感）
-            _timer.Interval = 2200;
-            _timer.Tick -= TimerHideTick;
-            _timer.Tick += TimerHideTick;
+            _timer.Interval = 2200;   // 停留 2.2 秒后淡出
             _timer.Stop(); _timer.Start();
             return;
         }
@@ -2153,33 +2192,25 @@ class ToastForm : Form
         if (_eggPhase == 0 && it.Instant)
         {
             _eggCurChar = it.Text.Length;
-            _eggMarkShown = true; _eggTailShown = true; _eggNoteShown = true;
             _eggPhase = 4; _eggPhaseCount = 4;
-            ForceRepaint();
+            RenderEggFrame();
             return;
         }
-        bool changed = false;
         switch (_eggPhase)
         {
             case 0:
-                if (_eggCurChar < it.Text.Length) { _eggCurChar++; changed = true; }
+                if (_eggCurChar < it.Text.Length) { _eggCurChar++; }
                 else
                 {
                     if (it.Mark.Length > 0 && _eggDots == 0)
                     {
                         _eggDots = 1;
-                        changed = true;
-                        _eggPhase = 1;
                         int md = (it.MarkDelayMs > 0) ? it.MarkDelayMs : EggMarkDelayMs;
                         _eggDotTicks = Math.Max(1, (md / 3) / EggTypeMs);   // 每点间隔 = 前摇/3
+                        _eggPhase = 1;
                         _eggPhaseCount = _eggDotTicks;
                     }
-                    else
-                    {
-                        _eggMarkShown = true;
-                        changed = true;
-                        AfterMark(it);
-                    }
+                    else { AfterMark(it); }
                 }
                 break;
             case 1:
@@ -2187,30 +2218,24 @@ class ToastForm : Form
                 if (_eggPhaseCount <= 0)
                 {
                     _eggDots++;
-                    if (_eggDots >= 3)
-                    {
-                        _eggNoteShown = true;
-                        changed = true;
-                        _eggPhase = 2;
-                        _eggPhaseCount = 3 * _eggDotTicks;   // 标记前摇 ≈ 单点延迟的 3 倍
-                    }
-                    else { _eggPhaseCount = _eggDotTicks; changed = true; }
+                    if (_eggDots >= 3) { _eggPhase = 2; _eggPhaseCount = 3 * _eggDotTicks; }   // 标记前摇 ≈ 单点延迟的 3 倍
+                    else { _eggPhaseCount = _eggDotTicks; }
                 }
                 break;
             case 2:
                 _eggPhaseCount--;
-                if (_eggPhaseCount <= 0) { _eggMarkShown = true; changed = true; AfterMark(it); }
+                if (_eggPhaseCount <= 0) { AfterMark(it); }
                 break;
             case 3:
                 _eggPhaseCount--;
-                if (_eggPhaseCount <= 0) { _eggTailShown = true; changed = true; _eggPhase = 4; _eggPhaseCount = EggPauseCount; }
+                if (_eggPhaseCount <= 0) { _eggPhase = 4; _eggPhaseCount = EggPauseCount; }
                 break;
             case 4:
                 _eggPhaseCount--;
-                if (_eggPhaseCount <= 0) { NextEggLine(); changed = true; }
+                if (_eggPhaseCount <= 0) NextEggLine();
                 break;
         }
-        if (changed) ForceRepaint();
+        RenderEggFrame();
     }
 
     void AfterMark(EggItem it)
@@ -2223,19 +2248,113 @@ class ToastForm : Form
     {
         _eggCurLine++;
         _eggCurChar = 0;
-        _eggMarkShown = false; _eggTailShown = false; _eggNoteShown = false;
         _eggDots = 0; _eggDotTicks = 0;
         _eggPhase = 0; _eggPhaseCount = 0;
-        UpdateEggSize();
     }
 
-    void UpdateEggSize()
+    // 每帧全量重画：干净画布 → 已完成行终态 → 当前行进度（无卡无顶部条，纯文字悬浮）
+    void RenderEggFrame()
     {
-        int visible = Math.Min(_eggCurLine + 1, _eggItems.Length);
-        Height = EggTopStrip + visible * _eggLineStep + 12;
-        ApplyRegion();
-        PositionToast();
-        ForceRepaint();
+        EnsureSurface(_eggW, _eggH);   // 含清空
+        // 行
+        for (int i = 0; i < _eggItems.Length; i++)
+        {
+            if (i > _eggCurLine) break;
+            DrawEggLineFull(i);
+        }
+        // 光标（当前行行尾）
+        if (_cursorOn && _eggCurLine < _eggItems.Length && !_eggItems[_eggCurLine].Instant && _eggPhase == 0)
+        {
+            int y = EggTop + _eggCurLine * _eggLineStep;
+            int cx = EggLeftPad + CurrentLineDrawnWidth();
+            using (SolidBrush cb = new SolidBrush(Theme.Accent))
+                _cg.FillRectangle(cb, cx + 2, y + 2, 6, _eggLineH - 5);
+        }
+        Push(255);
+    }
+
+    // 画一行的当前状态（i < _eggCurLine = 终态；i == _eggCurLine = 按 phase 进度）
+    void DrawEggLineFull(int i)
+    {
+        EggItem it = _eggItems[i];
+        bool complete = i < _eggCurLine;
+        int y = EggTop + i * _eggLineStep;
+        int x = EggLeftPad;
+        Color baseColor = LineBaseColor(it, i);
+        x = DrawSeg(x, y, it.Prefix, baseColor);
+        // 标记位：行完成/标记已出（点号满 3 后）时画标记；否则打字期间用全角空格占位（防跳动，与旧版一致）
+        if (it.Mark.Length > 0)
+        {
+            if (complete || _eggDots >= 3) x = DrawSeg(x, y, it.Mark, MarkColor(it.Mark));
+            else x = DrawSeg(x, y, "　", baseColor);
+        }
+        // 正文（打字进度）
+        string text;
+        if (it.Instant || complete || _eggPhase != 0) text = it.Text;
+        else text = (_eggCurChar > 0) ? it.Text.Substring(0, _eggCurChar) : "";
+        x = DrawSeg(x, y, text, baseColor);
+        // 点号（打完正文、标记出现前）
+        if (it.Mark.Length > 0 && (complete || _eggDots > 0))
+        {
+            int dots = complete ? 3 : _eggDots;
+            x = DrawSeg(x, y, new string('.', Math.Min(dots, 3)), DotColor(it, i));
+        }
+        // 备注 + 尾部（标记出现后）
+        bool after = complete || _eggPhase >= 3;
+        if (it.Note.Length > 0 && after)
+            x = DrawSeg(x, y, it.Note, baseColor);
+        if (it.Tail.Length > 0 && after)
+            x = DrawSeg(x, y, " " + it.Tail, Theme.Text);
+    }
+
+    // 画一段文本并返回新 x。同位置叠画两遍：AntiAlias 下小字笔划覆盖率仅 ~60%（单遍=六成透明，画面上发虚），
+    // 叠两遍合成 ~84% 覆盖率且边缘仍抗锯齿（与偏移衬影不同，同位置无重影）
+    int DrawSeg(int x, int y, string text, Color c)
+    {
+        if (text.Length == 0) return x;
+        using (SolidBrush b = new SolidBrush(c))
+        {
+            _cg.DrawString(text, _eggFont, b, x, y, StringFormat.GenericTypographic);
+            _cg.DrawString(text, _eggFont, b, x, y, StringFormat.GenericTypographic);
+        }
+        return x + (int)MeasureG(text, _eggFont).Width;
+    }
+
+    // 当前行已画宽度（Prefix + 占位/标记 + 已打字宽）
+    int CurrentLineDrawnWidth()
+    {
+        EggItem it = _eggItems[_eggCurLine];
+        int x = EggLeftPad;
+        x += (int)MeasureG(it.Prefix, _eggFont).Width;
+        if (it.Mark.Length > 0)
+        {
+            if (_eggDots >= 3) x += (int)MeasureG(it.Mark, _eggFont).Width;
+            else x += (int)MeasureG("　", _eggFont).Width;
+        }
+        string text = (_eggPhase == 0 && _eggCurChar < it.Text.Length && _eggCurChar > 0)
+            ? it.Text.Substring(0, _eggCurChar)
+            : (_eggPhase != 0 || _eggCurChar >= it.Text.Length ? it.Text : "");
+        x += (int)MeasureG(text, _eggFont).Width;
+        return x - EggLeftPad;
+    }
+
+    Color LineBaseColor(EggItem it, int lineIndex)
+    {
+        if (it.Accent) return Theme.Btn;
+        if (it.Mark.Length > 0) return (lineIndex % 2 == 0) ? Theme.Btn : Theme.Accent;
+        return Theme.Text;
+    }
+
+    Color DotColor(EggItem it, int lineIndex)
+    {
+        return LineBaseColor(it, lineIndex) == Theme.Btn ? Theme.Accent : Theme.Btn;
+    }
+
+    void CursorTick()
+    {
+        if (!_eggActive) return;
+        _cursorOn = !_cursorOn;
+        RenderEggFrame();
     }
 
     string FullItemText(EggItem it)
@@ -2248,121 +2367,12 @@ class ToastForm : Form
         return s;
     }
 
-    void DrawEggLines(Graphics g)
-    {
-        int iconSize = 18;
-        int iconY = (EggTopStrip - iconSize) / 2;
-        if (_iconImg != null)
-            g.DrawImage(_iconImg, new Rectangle(EggLeftPad, iconY, iconSize, iconSize));
-        string tag = "RMBCK v" + Application.ProductVersion;
-        Size tagSz = TextRenderer.MeasureText(tag, _eggSmallFont);
-        TextRenderer.DrawText(g, tag, _eggSmallFont,
-            new Rectangle(Width - EggRightPad - tagSz.Width, (EggTopStrip - tagSz.Height) / 2, tagSz.Width + 4, tagSz.Height),
-            Theme.TextSub, TextFormatFlags.Top | TextFormatFlags.Left);
-        using (Pen p = new Pen(Theme.GridLine))
-            g.DrawLine(p, EggLeftPad - 6, EggTopStrip - 6, Width - EggRightPad + 6, EggTopStrip - 6);
-
-        int x = EggLeftPad;
-        for (int i = 0; i < _eggItems.Length; i++)
-        {
-            if (i > _eggCurLine) break;
-            int y = EggTopStrip + i * _eggLineStep;
-            bool complete = i < _eggCurLine;
-            int endX = DrawEggLine(g, _eggItems[i], complete, i, x, y);
-            if (i == _eggCurLine && _cursorOn && !_eggItems[i].Instant)
-                using (SolidBrush cb = new SolidBrush(Theme.Accent))
-                    g.FillRectangle(cb, endX + 2, y + 2, 6, _eggLineH - 5);
-        }
-    }
-
-    // 返回行尾 x 坐标（供光标定位）
-    int DrawEggLine(Graphics g, EggItem it, bool complete, int lineIndex, int xStart, int y)
-    {
-        int x = xStart;
-        Color baseColor = Theme.Text;
-        if (it.Accent) baseColor = Theme.Btn;
-        else if (it.Mark.Length > 0) baseColor = (lineIndex % 2 == 0) ? Theme.Btn : Theme.Accent;
-        x = DrawSeg(g, it.Prefix, x, y, baseColor);
-        // 未显示时用全角空格占位，避免文字跳动
-        if (it.Mark.Length > 0)
-        {
-            if (complete || _eggMarkShown) x = DrawSeg(g, it.Mark, x, y, MarkColor(it.Mark));
-            else x = DrawSeg(g, "　", x, y, Theme.Text);
-        }
-        x = DrawSeg(g, GetTypedEggText(it, complete), x, y, baseColor);
-        if (it.Mark.Length > 0 && (complete || _eggDots > 0))
-        {
-            int dots = complete ? 3 : _eggDots;
-            Color dot = (baseColor == Theme.Btn) ? Theme.Accent : Theme.Btn;
-            x = DrawSeg(g, new string('.', dots), x, y, dot);
-        }
-        if (it.Note.Length > 0 && (complete || _eggNoteShown))
-            x = DrawSeg(g, it.Note, x, y, baseColor);
-        if (it.Tail.Length > 0 && (complete || _eggTailShown))
-            x = DrawSeg(g, " " + it.Tail, x, y, Theme.Text);
-        return x;
-    }
-
-    int DrawSeg(Graphics g, string text, int x, int y, Color color)
-    {
-        if (text.Length == 0) return x;
-        TextRenderer.DrawText(g, text, _eggFont, new Rectangle(x, y, 3000, _eggLineH), color,
-            TextFormatFlags.Top | TextFormatFlags.Left);
-        return x + TextRenderer.MeasureText(text, _eggFont).Width;
-    }
-
-    string GetTypedEggText(EggItem it, bool complete)
-    {
-        if (it.Instant || complete) return it.Text;
-        string t = it.Text;
-        if (_eggCurChar >= t.Length) return t;
-        return (_eggCurChar > 0) ? t.Substring(0, _eggCurChar) : "";
-    }
-
     Color MarkColor(string mark)
     {
         if (mark == "√") return Color.FromArgb(76, 175, 80);      // 绿（成功）
-        if (mark == "❌") return Color.FromArgb(235, 90, 110);     // 红（失败，与主界面状态红一致）
+        if (mark == "❌") return Color.FromArgb(235, 90, 110);     // 红（失败）
         if (mark == "⏳") return Color.FromArgb(240, 160, 40);     // 琥珀（进行中）
         return Theme.Text;
-    }
-
-    void ApplyRegion()
-    {
-        Region = new Region(Ui.RoundedPath(new Rectangle(0, 0, Width, Height), 14));
-    }
-
-    void PositionToast()
-    {
-        var wa = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(wa.Right - Width - 12, wa.Top + 12);
-    }
-
-    // 不激活窗口：不抢游戏焦点
-    protected override bool ShowWithoutActivation { get { return true; } }
-
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            var cp = base.CreateParams;
-            cp.ExStyle |= 0x08000000;   // WS_EX_NOACTIVATE
-            return cp;
-        }
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        Graphics g = e.Graphics;
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (SolidBrush bg = new SolidBrush(Theme.Bg))
-            g.FillRectangle(bg, ClientRectangle);
-        Ui.DrawGlassCard(g, new Rectangle(0, 0, Width - 1, Height - 1), 14);
-        using (GraphicsPath p = Ui.RoundedPath(new Rectangle(0, 0, Width - 1, Height - 1), 14))
-        using (var pen = new LinearGradientBrush(new Rectangle(0, 0, Width, Height), Theme.GradPink, Theme.GradViolet, 45f))
-            g.DrawPath(new Pen(pen, 1.4f), p);
-        if (_eggActive && _eggItems != null && _eggItems.Length > 0)
-            DrawEggLines(g);
     }
 }
 
@@ -2379,6 +2389,7 @@ class CloseDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
         BackColor = Theme.Bg;
+        DoubleBuffered = true;
         BuildUi();
     }
 
@@ -2408,6 +2419,7 @@ class PromptForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
         BackColor = Theme.Bg;
+        DoubleBuffered = true;
         BuildUi(prompt, def);
     }
 
@@ -2427,13 +2439,11 @@ class PromptForm : Form
     }
 }
 
-// 迷你状态 HUD：触发联动时右下角出现的小悬浮窗（置顶不抢焦点），松开自动消失
-// 完全透明版：UpdateLayeredWindow 逐像素 alpha 合成——除文字外整窗透明，不遮挡画面（游戏 OSD 标准做法）
-class HudForm : Form
+// 逐像素 alpha 透明窗基类（UpdateLayeredWindow）：绕过 WM_PAINT，天然免疫 DLP 重绘问题
+// 弹窗统一渲染路径——HUD/Toast/彩蛋共用；淡出用 SourceConstantAlpha（不重渲染；绝不设 Opacity——
+// WinForms 的 Opacity 会改走 SetLayeredWindowAttributes 劫持表面）
+class LayeredForm : Form
 {
-    string _text = "";
-    readonly Font _font;
-
     [StructLayout(LayoutKind.Sequential)]
     struct PT { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)]
@@ -2453,78 +2463,111 @@ class HudForm : Form
     const byte AC_SRC_ALPHA = 1;
     const uint ULW_ALPHA = 2;
 
-    public HudForm()
+    protected Bitmap _canvas;   // 直 alpha 绘画表面（Push 时整体转 premultiplied，推完转回）
+    protected Graphics _cg;     // _canvas 的 Graphics（复用免每次 FromImage）
+    Timer _fadeTimer;
+
+    protected LayeredForm()
     {
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
-        Size = new Size(190, 40);
-        _font = new Font(Font.FontFamily, 10f, FontStyle.Bold);
-        var wa = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(wa.Right - 210, wa.Bottom - 60);
     }
 
-    // 重画内容并用 UpdateLayeredWindow 推送（premultiplied-alpha 位图 → 系统逐像素合成）
-    void Render()
+    // 尺寸变化时重建画布；复用前必须 ClearSurface 全透明（残留 alpha 会叠加变白）
+    protected void EnsureSurface(int w, int h)
     {
-        int w = Width, h = Height;
-        if (w <= 0 || h <= 0 || !IsHandleCreated) return;
-        using (Bitmap bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+        if (_canvas != null && _canvas.Width == w && _canvas.Height == h) { ClearSurface(); return; }
+        if (_cg != null) { try { _cg.Dispose(); } catch { } }
+        if (_canvas != null) { try { _canvas.Dispose(); } catch { } }
+        _canvas = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        _cg = Graphics.FromImage(_canvas);
+        _cg.SmoothingMode = SmoothingMode.AntiAlias;
+        _cg.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;   // ClearType 在透明画布上 alpha 残缺→文字发虚，必须整像素抗锯齿
+        ClearSurface();
+    }
+
+    // 全画布写为透明（SourceCopy 覆盖 alpha，普通 FillRectangle 无法写 alpha=0）
+    protected void ClearSurface()
+    {
+        if (_cg == null) return;
+        var oldMode = _cg.CompositingMode;
+        _cg.CompositingMode = CompositingMode.SourceCopy;
+        using (SolidBrush t = new SolidBrush(Color.FromArgb(0, 0, 0, 0)))
+            _cg.FillRectangle(t, 0, 0, _canvas.Width, _canvas.Height);
+        _cg.CompositingMode = oldMode;
+        _premultiplied = false;   // 画布已回到直 alpha 状态
+    }
+
+    // 整幅画布 premultiply 后经 UpdateLayeredWindow 推送（alpha=整体透明度，淡出只降此值不重画）。
+    // _px 始终保存直 alpha 原稿（只读）；_pm 是 premultiplied 工作缓冲写回画布——重复 Push（淡出）不失真
+    byte[] _px;                 // 直 alpha 原稿（只读）
+    byte[] _pm;                 // premultiplied 工作缓冲
+    bool _premultiplied;        // 画布当前是否处于 premultiplied 状态
+
+    protected void Push(byte alpha)
+    {
+        if (_canvas == null || !IsHandleCreated) return;
+        int w = _canvas.Width, h = _canvas.Height;
+        var bd = _canvas.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.ReadWrite, _canvas.PixelFormat);
+        int len = bd.Stride * h;
+        if (_px == null || _px.Length < len) { _px = new byte[len]; _pm = new byte[len]; }
+        if (!_premultiplied)
+            Marshal.Copy(bd.Scan0, _px, 0, len);   // 画布是直 alpha → 存为原稿
+        // 从原稿生成 premultiplied 写回画布（原稿不动）
+        for (int i = 0; i < len; i += 4)
         {
-            using (Graphics g = Graphics.FromImage(bmp))
-            {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                using (SolidBrush shadow = new SolidBrush(Color.FromArgb(110, 255, 255, 255)))
-                    g.DrawString(_text, _font, shadow, new RectangleF(15, 7, w - 20, h - 10));
-                using (SolidBrush tb = new SolidBrush(Theme.Btn))
-                    g.DrawString(_text, _font, tb, new RectangleF(14, 6, w - 20, h - 10));
-            }
-            // GDI+ 位图 → premultiplied alpha（UpdateLayeredWindow 的硬性要求）；不用 unsafe，Marshal.Copy 到托管数组处理
-            var bd = bmp.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.ReadWrite, bmp.PixelFormat);
-            int len = bd.Stride * h;
-            byte[] px = new byte[len];
-            Marshal.Copy(bd.Scan0, px, 0, len);
-            for (int i = 0; i < len; i += 4)
-            {
-                double a = px[i + 3] / 255.0;
-                px[i] = (byte)(px[i] * a);
-                px[i + 1] = (byte)(px[i + 1] * a);
-                px[i + 2] = (byte)(px[i + 2] * a);
-            }
-            Marshal.Copy(px, 0, bd.Scan0, len);
-            bmp.UnlockBits(bd);
-
-            IntPtr screenDc = GetDC(IntPtr.Zero);
-            IntPtr memDc = CreateCompatibleDC(screenDc);
-            IntPtr hBitmap = bmp.GetHbitmap(Color.FromArgb(0));
-            IntPtr old = SelectObject(memDc, hBitmap);
-            PT src = new PT(); src.X = 0; src.Y = 0;
-            PT loc = new PT(); loc.X = Location.X; loc.Y = Location.Y;
-            SZ size = new SZ(); size.Cx = w; size.Cy = h;
-            var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = 255, AlphaFormat = AC_SRC_ALPHA };
-            UpdateLayeredWindow(Handle, screenDc, ref loc, ref size, memDc, ref src, 0, ref blend, ULW_ALPHA);
-            SelectObject(memDc, old);
-            DeleteObject(hBitmap);
-            DeleteDC(memDc);
-            ReleaseDC(IntPtr.Zero, screenDc);
+            int a = _px[i + 3];
+            if (a == 255 || a == 0) { _pm[i] = _px[i]; _pm[i + 1] = _px[i + 1]; _pm[i + 2] = _px[i + 2]; _pm[i + 3] = _px[i + 3]; continue; }
+            double af = a / 255.0;
+            _pm[i] = (byte)(_px[i] * af);
+            _pm[i + 1] = (byte)(_px[i + 1] * af);
+            _pm[i + 2] = (byte)(_px[i + 2] * af);
+            _pm[i + 3] = (byte)a;
         }
+        Marshal.Copy(_pm, 0, bd.Scan0, len);
+        _canvas.UnlockBits(bd);
+        _premultiplied = true;
+
+        IntPtr screenDc = GetDC(IntPtr.Zero);
+        IntPtr memDc = CreateCompatibleDC(screenDc);
+        IntPtr hBitmap = _canvas.GetHbitmap(Color.FromArgb(0));
+        IntPtr old = SelectObject(memDc, hBitmap);
+        PT src = new PT(); src.X = 0; src.Y = 0;
+        PT loc = new PT(); loc.X = Location.X; loc.Y = Location.Y;
+        SZ size = new SZ(); size.Cx = w; size.Cy = h;
+        var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = alpha, AlphaFormat = AC_SRC_ALPHA };
+        UpdateLayeredWindow(Handle, screenDc, ref loc, ref size, memDc, ref src, 0, ref blend, ULW_ALPHA);
+        SelectObject(memDc, old);
+        DeleteObject(hBitmap);
+        DeleteDC(memDc);
+        ReleaseDC(IntPtr.Zero, screenDc);
     }
 
-    public void ShowText(string text)
+    // 淡出：alpha 阶梯下降（约 10 步），结束后隐藏并回调
+    protected void FadeOut(int ms, byte step, MethodInvoker done)
     {
-        _text = text;
-        Size sz = TextRenderer.MeasureText(text, _font);
-        Width = sz.Width + 30; Height = sz.Height + 14;
-        var wa = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(wa.Right - Width - 20, wa.Bottom - Height - 20);
-        if (!Visible) Show();
-        Render();
+        StopFade();
+        byte a = 250;
+        Timer t = new Timer { Interval = Math.Max(10, ms / 10) };
+        _fadeTimer = t;
+        t.Tick += delegate
+        {
+            if (a <= step) { t.Stop(); t.Dispose(); Hide(); if (done != null) done(); return; }
+            a -= step;
+            Push(a);
+        };
+        t.Start();
     }
 
-    public void HideHud()
+    protected void StopFade()
     {
-        if (Visible) Hide();
+        if (_fadeTimer != null)
+        {
+            try { _fadeTimer.Stop(); _fadeTimer.Dispose(); } catch { }
+            _fadeTimer = null;
+        }
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
@@ -2537,6 +2580,59 @@ class HudForm : Form
             cp.ExStyle |= 0x08000000 | 0x00080000;   // WS_EX_NOACTIVATE | WS_EX_LAYERED
             return cp;
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            StopFade();
+            if (_cg != null) { try { _cg.Dispose(); } catch { } _cg = null; }
+            if (_canvas != null) { try { _canvas.Dispose(); } catch { } _canvas = null; }
+        }
+        base.Dispose(disposing);
+    }
+}
+
+// 迷你状态 HUD：触发联动时右下角出现的小悬浮窗（置顶不抢焦点），松开自动消失
+// 完全透明：除文字外整窗透明，不遮挡画面（游戏 OSD 标准做法）
+class HudForm : LayeredForm
+{
+    string _text = "";
+    readonly Font _font;
+
+    public HudForm()
+    {
+        _font = new Font(Font.FontFamily, 10f, FontStyle.Bold);
+    }
+
+    public void ShowText(string text)
+    {
+        _text = text;
+        SizeF sz = MeasureG(text, _font);
+        int w = (int)sz.Width + 30, h = (int)sz.Height + 14;
+        EnsureSurface(w, h);
+        using (SolidBrush shadow = new SolidBrush(Color.FromArgb(110, 255, 255, 255)))
+            _cg.DrawString(_text, _font, shadow, new RectangleF(15, 7, w - 20, h - 10));
+        using (SolidBrush tb = new SolidBrush(Theme.Btn))
+            _cg.DrawString(_text, _font, tb, new RectangleF(14, 6, w - 20, h - 10));
+        var wa = Screen.PrimaryScreen.WorkingArea;
+        Location = new Point(wa.Right - w - 20, wa.Bottom - h - 20);
+        Width = w; Height = h;
+        if (!Visible) Show();
+        Push(255);
+    }
+
+    public void HideHud()
+    {
+        if (Visible) Hide();
+    }
+
+    internal static SizeF MeasureG(string text, Font font)
+    {
+        using (Bitmap m = new Bitmap(1, 1))
+        using (Graphics mg = Graphics.FromImage(m))
+            return mg.MeasureString(text, font, PointF.Empty, StringFormat.GenericTypographic);
     }
 }
 
@@ -2612,6 +2708,7 @@ class FeedbackForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
         BackColor = Theme.Bg;
+        DoubleBuffered = true;
         BuildUi();
     }
 
@@ -2628,17 +2725,17 @@ class FeedbackForm : Form
         y += 44;
 
         Label lGender = new Label { Text = "性别:", Location = new Point(20, y + 4), AutoSize = true, ForeColor = Theme.Text, Tag = "hidden", Visible = false };
-        _gender = new ComboBox { Location = new Point(120, y), Width = 230, DropDownStyle = ComboBoxStyle.DropDownList, Tag = "hidden", Visible = false };
+        _gender = ThemedCombo(new Point(120, y), 230);
         _gender.Items.AddRange(new object[] { "男", "女", "其他" });
         Controls.Add(lGender); Controls.Add(_gender);
         y += 32;
         Label lFood = new Label { Text = "喜欢的食物:", Location = new Point(20, y + 4), AutoSize = true, ForeColor = Theme.Text, Tag = "hidden", Visible = false };
-        _food = new ComboBox { Location = new Point(120, y), Width = 230, DropDownStyle = ComboBoxStyle.DropDownList, Tag = "hidden", Visible = false };
+        _food = ThemedCombo(new Point(120, y), 230);
         _food.Items.AddRange(new object[] { "火锅", "烧烤", "奶茶", "汉堡", "寿司", "辣条", "麻辣烫" });
         Controls.Add(lFood); Controls.Add(_food);
         y += 32;
         Label lZodiac = new Label { Text = "星座:", Location = new Point(20, y + 4), AutoSize = true, ForeColor = Theme.Text, Tag = "hidden", Visible = false };
-        _zodiac = new ComboBox { Location = new Point(120, y), Width = 230, DropDownStyle = ComboBoxStyle.DropDownList, Tag = "hidden", Visible = false };
+        _zodiac = ThemedCombo(new Point(120, y), 230);
         _zodiac.Items.AddRange(new object[] { "白羊座", "金牛座", "双子座", "巨蟹座", "狮子座", "处女座", "天秤座", "天蝎座", "射手座", "摩羯座", "水瓶座", "双鱼座" });
         Controls.Add(lZodiac); Controls.Add(_zodiac);
         y += 44;
@@ -2657,6 +2754,19 @@ class FeedbackForm : Form
             DialogResult = DialogResult.OK;
         };
         Controls.Add(_submit);
+    }
+
+    // 主题化下拉框（白底粉字，与主窗一致）；Tag=hidden 供揭示流程批量显隐
+    static ComboBox ThemedCombo(Point loc, int width)
+    {
+        return new ComboBox
+        {
+            Location = loc, Width = width,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Theme.Card, ForeColor = Theme.Text,
+            Tag = "hidden", Visible = false
+        };
     }
 }
 
@@ -2716,26 +2826,6 @@ static class Ui
         return path;
     }
 
-    public static void DrawGlassCard(Graphics g, Rectangle r, int radius)
-    {
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (GraphicsPath s1 = RoundedPath(new Rectangle(r.X + 1, r.Y + 3, r.Width, r.Height), radius))
-        using (SolidBrush b1 = new SolidBrush(Theme.Shadow1))
-            g.FillPath(b1, s1);
-        using (GraphicsPath s2 = RoundedPath(new Rectangle(r.X + 2, r.Y + 8, r.Width, r.Height), radius))
-        using (SolidBrush b2 = new SolidBrush(Theme.Shadow2))
-            g.FillPath(b2, s2);
-        using (GraphicsPath body = RoundedPath(r, radius))
-        using (SolidBrush bodyB = new SolidBrush(Theme.GlassCard))
-            g.FillPath(bodyB, body);
-        using (GraphicsPath hi = RoundedPath(new Rectangle(r.X + 1, r.Y + 1, r.Width - 2, r.Height / 2), radius))
-        using (Pen hp = new Pen(Theme.GlassCardHi, 1.4f))
-            g.DrawPath(hp, hi);
-        using (GraphicsPath edge = RoundedPath(r, radius))
-        using (Pen ep = new Pen(Color.FromArgb(120, Theme.GridLine)))
-            g.DrawPath(ep, edge);
-    }
-
     public static void DrawGlow(Graphics g, Rectangle r, int radius, Color glowColor)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -2749,8 +2839,19 @@ static class Ui
 
     // 窗体背景（粉底+柔光斑）统一绘制：窗体与卡片共用，保证卡片圆角外区域与窗体背景像素级连续（消除直角边）
     // formW/formH = 窗体客户区尺寸；offX/offY = 目标画布相对窗体的偏移（窗体传 0,0；卡片传 -Left,-Top）
+    // 性能：每个按钮/卡片 OnPaint 都走这里，6 个光斑=12 次分配/控件/帧——首次（零偏移=主窗本体）渲染进 Bitmap 缓存，
+    // 之后所有调用直接 blit；尺寸变化/窗体销毁时失效
+    static Bitmap _bdCache;
+    static int _bdW, _bdH;
+
     public static void PaintBackdrop(Graphics g, int formW, int formH, int offX, int offY)
     {
+        if (_bdCache != null && _bdW == formW && _bdH == formH)
+        {
+            g.DrawImage(_bdCache, new Rectangle(offX, offY, formW, formH),
+                new Rectangle(0, 0, formW, formH), GraphicsUnit.Pixel);
+            return;
+        }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         using (SolidBrush bg = new SolidBrush(Theme.Bg))
             g.FillRectangle(bg, new Rectangle(-4096, -4096, 8192, 8192));   // 足够大的矩形覆盖任意偏移画布
@@ -2760,6 +2861,31 @@ static class Ui
         Blob(g, formW - 260 + offX, formH - 200 + offY, 340, 34, Theme.Accent);
         Blob(g, formW / 2 - 200 + offX, formH / 2 - 60 + offY, 380, 26, Theme.GradPink);
         Blob(g, formW - 380 + offX, formH - 380 + offY, 300, 22, Theme.Accent);
+        // 建缓存只在主窗本体绘制（offX=offY=0）时进行，避免某卡片/按钮的局部画布抢先占位
+        if (_bdCache == null && offX == 0 && offY == 0 && formW > 0 && formH > 0)
+        {
+            Bitmap bd = new Bitmap(formW, formH);
+            using (Graphics bg2 = Graphics.FromImage(bd))
+            {
+                bg2.SmoothingMode = SmoothingMode.AntiAlias;
+                using (SolidBrush fill = new SolidBrush(Theme.Bg))
+                    bg2.FillRectangle(fill, 0, 0, formW, formH);
+                Blob(bg2, -60, -80, 420, 44, Theme.GradPink);
+                Blob(bg2, formW - 300, -40, 360, 40, Theme.GlassCard);
+                Blob(bg2, -80, formH - 260, 400, 42, Color.White);
+                Blob(bg2, formW - 260, formH - 200, 340, 34, Theme.Accent);
+                Blob(bg2, formW / 2 - 200, formH / 2 - 60, 380, 26, Theme.GradPink);
+                Blob(bg2, formW - 380, formH - 380, 300, 22, Theme.Accent);
+            }
+            _bdCache = bd; _bdW = formW; _bdH = formH;
+        }
+    }
+
+    // 尺寸变化/窗体销毁时失效缓存（主窗固定尺寸，实际只建一次）
+    public static void InvalidateBackdropCache()
+    {
+        if (_bdCache != null) { try { _bdCache.Dispose(); } catch { } _bdCache = null; }
+        _bdW = _bdH = 0;
     }
 
     static void Blob(Graphics g, int x, int y, int d, int alpha, Color c)
@@ -2882,14 +3008,12 @@ class RoundedSlider : Control
         set
         {
             int v = Math.Max(_min, Math.Min(_max, value));
-            if (v != _value)
-            {
-                _value = v;
-                EventHandler h = ValueChanged;
-                if (h != null) h(this, EventArgs.Empty);
-            }
+            if (v == _value) return;   // 值未变化直接跳过（原实现仍强制同步重绘一次）
+            _value = v;
             Invalidate();
             Update();
+            EventHandler h = ValueChanged;
+            if (h != null) h(this, EventArgs.Empty);
         }
     }
 

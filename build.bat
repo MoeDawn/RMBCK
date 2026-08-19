@@ -5,7 +5,7 @@ if not exist "%CSC%" set CSC=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe
 del /q "RMBKeyLinker.exe" 2>nul
 del /q "RMBCK 0.2.16.exe" 2>nul
 rem 注意：exe 文件名里的版本号需与 RightClickKeyLinker.cs 的 AssemblyVersion 保持一致，升版本时同步修改
-"%CSC%" /nologo /codepage:65001 /target:winexe /out:"RMBCK 1.0.1.exe" ^
+"%CSC%" /nologo /codepage:65001 /target:winexe /out:"RMBCK 1.1.0.exe" ^
   /win32manifest:app.manifest ^
   /win32icon:icon.ico ^
   /resource:err.jpg,RMBKeyLinker.err.jpg ^
@@ -17,4 +17,4 @@ rem 注意：exe 文件名里的版本号需与 RightClickKeyLinker.cs 的 Assem
   /resource:iconf4.png,RMBKeyLinker.iconf4.png ^
   /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll ^
   RightClickKeyLinker.cs
-if %errorlevel%==0 (echo 编译成功: RMBCK 1.0.1.exe) else (echo 编译失败 & exit /b 1)
+if %errorlevel%==0 (echo 编译成功: RMBCK 1.1.0.exe) else (echo 编译失败 & exit /b 1)
