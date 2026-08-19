@@ -12,9 +12,9 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("右键长按联动器")]
 [assembly: AssemblyTitle("千恋万花安装器(反MC)")]
 [assembly: AssemblyDescription("千恋万花安装器(反MC)")]
-[assembly: AssemblyVersion("1.0.0")]
-[assembly: AssemblyFileVersion("1.0.0")]
-[assembly: AssemblyInformationalVersion("1.0.0")]
+[assembly: AssemblyVersion("1.0.1")]
+[assembly: AssemblyFileVersion("1.0.1")]
+[assembly: AssemblyInformationalVersion("1.0.1")]
 
 class Program
 {
@@ -219,6 +219,7 @@ class AppSettings
     public bool SuppressEgg = false;
     public bool SuppressHud = false;
     public bool SuppressHotkeyToast = false;
+    public bool HeaderAnim = true;   // 头部 logo 帧动画开关
     public List<KeyConfig> Keys = new List<KeyConfig>();
 }
 
@@ -292,6 +293,7 @@ static class ConfigStore
                     else if (k == "SuppressEgg") { bool b; if (bool.TryParse(v, out b)) s.SuppressEgg = b; }
                     else if (k == "SuppressHud") { bool b; if (bool.TryParse(v, out b)) s.SuppressHud = b; }
                     else if (k == "SuppressHotkeyToast") { bool b; if (bool.TryParse(v, out b)) s.SuppressHotkeyToast = b; }
+                    else if (k == "HeaderAnim") { bool b; if (bool.TryParse(v, out b)) s.HeaderAnim = b; }
                 }
                 else if (section.StartsWith("Key"))
                 {
@@ -333,6 +335,7 @@ static class ConfigStore
         sb.AppendLine("SuppressEgg=" + s.SuppressEgg);
         sb.AppendLine("SuppressHud=" + s.SuppressHud);
         sb.AppendLine("SuppressHotkeyToast=" + s.SuppressHotkeyToast);
+        sb.AppendLine("HeaderAnim=" + s.HeaderAnim);
         for (int i = 0; i < s.Keys.Count; i++)
         {
             var kc = s.Keys[i];
@@ -626,6 +629,7 @@ class MainForm : Form
     FlatButton _btnMin, _btnClose;
     Panel _cfgCard;   // 原生 Panel 不自绘，DLP 不破坏
     FlatButton _supToast, _supEgg, _supHud, _supHotkey;
+    FlatButton _animBtn;   // 头部动态图标开关
     BorderBox _cardTop, _cardKey, _cardTest, _cardBottom;   // 四张分区卡（Shown 时强制重绘防 DLP 首绘黑框）
     Timer _tickTimer, _testTimer, _gateTimer;
     NotifyIcon _tray; Icon _trayIcon;
@@ -653,7 +657,9 @@ class MainForm : Form
         Graphics g = e.Graphics;
         Ui.PaintBackdrop(g, ClientSize.Width, ClientSize.Height, 0, 0);
         int hs = 54;
-        if (_headerIcon != null)
+        if (_headerFrames.Length > 0)
+            g.DrawImage(_headerFrames[_headerFrameIndex], new Rectangle(18, (hs - 28) / 2, 28, 28));
+        else if (_headerIcon != null)
             g.DrawImage(_headerIcon, new Rectangle(18, (hs - 28) / 2, 28, 28));
         string title = "RMB * Keybind";
         Font titleFont = new Font(Font.FontFamily, 13.5f, FontStyle.Bold);
@@ -670,9 +676,15 @@ class MainForm : Form
 
     Image _headerIcon;
 
+    // 头部 logo 帧动画：多帧时循环切换，单帧/无帧退回静态 _headerIcon；任务栏/窗口图标不参与
+    Image[] _headerFrames = new Image[0];
+    int _headerFrameIndex;
+    Timer _headerAnimTimer;
+    const int HeaderFrameMs = 3000;   // 帧间隔
+
     int tagH(Font f)
     {
-        return TextRenderer.MeasureText("v1.0.0", f).Height;
+        return TextRenderer.MeasureText("v1.0.1", f).Height;
     }
 
     // 强制刷新整张卡及其子控件（DLP 首绘黑框 workaround：等价于鼠标掠过触发的重绘）
@@ -726,6 +738,29 @@ class MainForm : Form
             }
         }
         catch { _headerIcon = null; }
+        // 帧动画：内嵌资源 iconf1.png, iconf2.png, ... 依次加载，≥2 帧才启动定时器（任务栏/窗口图标不参与切换）
+        try
+        {
+            var frames = new List<Image>();
+            for (int i = 1; ; i++)
+            {
+                Stream fs = typeof(MainForm).Assembly.GetManifestResourceStream("RMBKeyLinker.iconf" + i + ".png");
+                if (fs == null) break;
+                using (fs) frames.Add(Image.FromStream(fs));
+            }
+            _headerFrames = frames.ToArray();
+            if (_headerFrames.Length >= 2)
+            {
+                _headerAnimTimer = new Timer { Interval = HeaderFrameMs };
+                _headerAnimTimer.Tick += (s, e) =>
+                {
+                    _headerFrameIndex = (_headerFrameIndex + 1) % _headerFrames.Length;
+                    Invalidate(); Update();   // DLP 环境下强制同步重绘
+                };
+                _headerAnimTimer.Start();
+            }
+        }
+        catch { _headerFrames = new Image[0]; }
         Shown += (s, e) =>
         {
             TopMost = true; Activate(); TopMost = false;
@@ -899,6 +934,15 @@ class MainForm : Form
         _supEgg = new FlatButton { Text = "彩蛋:开", Location = new Point(80, sy), Width = 66, ToggleStyle = true };
         _supHud = new FlatButton { Text = "HUD:开", Location = new Point(150, sy), Width = 66, ToggleStyle = true };
         _supHotkey = new FlatButton { Text = "热键提示:开", Location = new Point(220, sy), Width = 88, ToggleStyle = true };
+        _animBtn = new FlatButton { Text = "动态图标:开", Location = new Point(314, sy), Width = 92, ToggleStyle = true };
+        _animBtn.Click += (s, e) =>
+        {
+            _settings.HeaderAnim = !_settings.HeaderAnim;
+            SetHeaderAnim(_settings.HeaderAnim);
+            SaveSettings();
+        };
+        var animTip = new ToolTip();
+        animTip.SetToolTip(_animBtn, "开：窗口头部 logo 每 3 秒切换一张\n关：固定显示第一张");
         _supToast.Click += (s, e) => ToggleSup(_supToast, ref _settings.SuppressToast, "提示");
         _supEgg.Click += (s, e) => ToggleSup(_supEgg, ref _settings.SuppressEgg, "彩蛋");
         _supHud.Click += (s, e) => ToggleSup(_supHud, ref _settings.SuppressHud, "HUD");
@@ -909,6 +953,7 @@ class MainForm : Form
         supTip.SetToolTip(_supHud, "触发联动时右下角的 ⚡ 迷你悬浮窗");
         supTip.SetToolTip(_supHotkey, "Ctrl+F12 切换联动开关时的状态提示");
         _cardBottom.Controls.Add(_supToast); _cardBottom.Controls.Add(_supEgg); _cardBottom.Controls.Add(_supHud); _cardBottom.Controls.Add(_supHotkey);
+        _cardBottom.Controls.Add(_animBtn);
         Controls.Add(_cardBottom);
 
         var footer1 = new Label
@@ -967,6 +1012,9 @@ class MainForm : Form
         _supEgg.Checked = !_settings.SuppressEgg; _supEgg.Text = _settings.SuppressEgg ? "彩蛋:关" : "彩蛋:开";
         _supHud.Checked = !_settings.SuppressHud; _supHud.Text = _settings.SuppressHud ? "HUD:关" : "HUD:开";
         _supHotkey.Checked = !_settings.SuppressHotkeyToast; _supHotkey.Text = _settings.SuppressHotkeyToast ? "热键提示:关" : "热键提示:开";
+        // 动态图标开关初始状态（含停/启 Timer、回第 1 帧）
+        if (_headerAnimTimer != null || _headerFrames.Length > 0)
+            SetHeaderAnim(_settings.HeaderAnim);
         _ctrl.RandomJitter = _settings.RandomJitter;
         UpdateJitterButton();
         if (populateProcs) PopulateProcesses();   // 首次构造跳过（Shown 会填，含自身进程）；方案切换时填
@@ -1246,6 +1294,24 @@ class MainForm : Form
         btn.Text = name + (suppressed ? ":关" : ":开");
         btn.Refresh();
         SaveSettings();
+    }
+
+    // 头部动态图标开关：控制帧动画 Timer；关闭时回第 1 帧并重绘
+    void SetHeaderAnim(bool on)
+    {
+        if (_headerAnimTimer != null)
+        {
+            if (on) _headerAnimTimer.Start();
+            else _headerAnimTimer.Stop();
+        }
+        if (!on)
+        {
+            _headerFrameIndex = 0;
+            Invalidate(); Update();
+        }
+        _animBtn.Checked = on;
+        _animBtn.Text = on ? "动态图标:开" : "动态图标:关";
+        _animBtn.Refresh();
     }
 
     // 未选目标进程时始终为真；选了目标则要求该进程窗口在前台。
@@ -1561,6 +1627,7 @@ class MainForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        try { if (_headerAnimTimer != null) { _headerAnimTimer.Stop(); _headerAnimTimer.Dispose(); } } catch { }
         try { if (_tray != null) { _tray.Visible = false; _tray.Dispose(); } } catch { }
         try { if (_trayIcon != null) _trayIcon.Dispose(); } catch { }
         try { UnregisterHotKey(Handle, HotkeyId); } catch { }
