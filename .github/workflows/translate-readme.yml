@@ -1,0 +1,22 @@
+name: 自动翻译README
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'README.md'
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 运行翻译
+        uses: doctorfree/readme-translate-action@v1.2.0
+        with:
+          target_languages: "en,ja"
+          auth_token: ${{ secrets.GITHUB_TOKEN }}
