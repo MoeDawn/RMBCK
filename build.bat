@@ -16,5 +16,6 @@ rem 注意：exe 文件名里的版本号需与 RightClickKeyLinker.cs 的 Assem
   /resource:iconf3.png,RMBKeyLinker.iconf3.png ^
   /resource:iconf4.png,RMBKeyLinker.iconf4.png ^
   /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll ^
+  src\Core\Settings.cs src\Core\Keys.cs src\Core\Hooks.cs src\Core\Trigger.cs ^
   RightClickKeyLinker.cs
 if %errorlevel%==0 (echo 编译成功: RMBCK 1.1.0.exe) else (echo 编译失败 & exit /b 1)
