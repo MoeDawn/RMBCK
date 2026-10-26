@@ -710,9 +710,14 @@ class TriggerController
 
     void ReleaseModsNotNeededByHold()
     {
+        // 只保留「已触发的保持行」还需要按住的修饰键：未到点的保持行不算，
+        // 否则点按结束后修饰键会独自悬空，产生意外的 Ctrl/Shift+单击。
         int needed = 0;
-        foreach (var kc in _config)
-            if (kc.Enabled && kc.Mode == KeyMode.Hold) needed |= kc.Mods;
+        for (int i = 0; i < _config.Count; i++)
+        {
+            var kc = _config[i];
+            if (kc.Enabled && kc.Mode == KeyMode.Hold && WasFired(i)) needed |= kc.Mods & 0x0F;
+        }
         for (int i = _heldMods.Count - 1; i >= 0; i--)
         {
             int vk = _heldMods[i];
