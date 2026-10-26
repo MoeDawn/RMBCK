@@ -595,8 +595,14 @@ class MainForm : Form
     void HandleCapturedKey(int vk, bool down)
     {
         // 触发期间的键盘事件可能来自本程序 SendInput 的自动按键（IsTriggered 覆盖
-        // OnTick 的 KeyDown/KeyTap 以及 OnRightUp 的 KeyUp），不能参与捕获
-        if (_rt.Ctrl.IsTriggered) return;
+        // OnTick 的 KeyDown/KeyTap 以及 OnRightUp 的 KeyUp），不能参与捕获。
+        // 但仍同步 key-up 的按下集合，避免触发前按住的修饰键残留在 _keysDown；
+        // 触发结束无需反向补偿：期间的按下同样被忽略，集合只会因 key-up 收缩。
+        if (_rt.Ctrl.IsTriggered)
+        {
+            if (!down) _keysDown.Remove(vk);
+            return;
+        }
 
         if (!_capturing)
         {
