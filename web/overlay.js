@@ -56,7 +56,7 @@
       h.className = "hud";
       h.textContent = textOf(data.text);
       root.appendChild(h);
-    } else if (kind === "hud-hide") {
+    } else if (kind === "hud-hide" || kind === "clear") {
       resetRoot("");
     } else if (kind === "egg") {
       startEgg(data.items || []);

@@ -13,6 +13,7 @@ class OverlayForm : Form
 {
     const int WM_MOUSEACTIVATE = 0x0021;
     const int MA_NOACTIVATE = 3;
+    const int MaxPending = 8;
 
     // WebView2 控制器创建时可能把线程焦点移到悬浮窗；记住悬浮窗出现前
     // 的焦点窗口，只在焦点确实被悬浮窗拿走时还原，绝不主动激活任何窗口。
@@ -30,7 +31,20 @@ class OverlayForm : Form
     readonly string _page;
     WebView2 _wv;
     bool _ready;
+    bool _everShown;
     string _theme = "Night";
+
+    // 内容窗（Toast / 彩蛋）：消息真正投递后才显示，避免导航未完成时计时器先隐藏
+    bool _wantVisible;
+    string _wantKind = "";
+    int _toastDurationMs = 2000;
+    bool _contentPending;
+
+    // HUD：只记录“想不想显示”，不把 hud/hud-hide 成对塞进队列
+    bool _hudWantVisible;
+    bool _hudVisible;
+    string _hudText = "";
+
     readonly Queue<string> _pending = new Queue<string>();
     Timer _hideTimer;
 
@@ -117,7 +131,10 @@ class OverlayForm : Form
 
     public void ShowToast(string text, string kind, int durationMs)
     {
-        if (!EnsureVisible()) return;
+        _wantVisible = true;
+        _wantKind = "toast";
+        _toastDurationMs = Math.Max(300, durationMs);
+        StopHideTimer();
 
         Dictionary<string, object> data = new Dictionary<string, object>();
         data["text"] = text;
@@ -125,59 +142,87 @@ class OverlayForm : Form
         Dictionary<string, object> msg = new Dictionary<string, object>();
         msg["kind"] = "toast";
         msg["data"] = data;
-        Send(msg);
 
-        if (_hideTimer == null)
+        if (Send(msg))
         {
-            _hideTimer = new Timer();
-            _hideTimer.Tick += delegate
-            {
-                _hideTimer.Stop();
-                HideSafely();
-            };
+            // 已就绪：消息已投递，此时才显示并开始计时
+            PresentWindow();
+            ArmHideTimer();
         }
-        _hideTimer.Stop();
-        _hideTimer.Interval = Math.Max(300, durationMs);
-        _hideTimer.Start();
+        else
+        {
+            // 尚未导航完成：只排队，窗口保持透明/隐藏；Flush 投递后再显示并计时
+            _contentPending = true;
+            EnsureInitialized();
+        }
     }
 
     public void ShowEgg(object[] items)
     {
-        if (_hideTimer != null) _hideTimer.Stop();
-        if (!EnsureVisible()) return;
+        _wantVisible = true;
+        _wantKind = "egg";
+        StopHideTimer();
 
         Dictionary<string, object> data = new Dictionary<string, object>();
         data["items"] = items;
         Dictionary<string, object> msg = new Dictionary<string, object>();
         msg["kind"] = "egg";
         msg["data"] = data;
-        Send(msg);
+
+        if (Send(msg))
+        {
+            PresentWindow();
+        }
+        else
+        {
+            _contentPending = true;
+            EnsureInitialized();
+        }
     }
 
     public void ShowHud(string text)
     {
-        if (!EnsureVisible()) return;
+        _hudWantVisible = true;
+        _hudText = text;
+        EnsureInitialized();
 
-        Dictionary<string, object> data = new Dictionary<string, object>();
-        data["text"] = text;
-        Dictionary<string, object> msg = new Dictionary<string, object>();
-        msg["kind"] = "hud";
-        msg["data"] = data;
-        Send(msg);
+        if (_ready && PostHud(text))
+        {
+            _hudVisible = true;
+            PresentWindow();
+        }
     }
 
     public void HideHud()
     {
-        Dictionary<string, object> msg = new Dictionary<string, object>();
-        msg["kind"] = "hud-hide";
-        msg["data"] = new Dictionary<string, object>();
-        Send(msg);
+        _hudWantVisible = false;
+        if (_ready && _hudVisible)
+        {
+            PostHudHide();
+            _hudVisible = false;
+        }
         HideSafely();
     }
 
-    bool EnsureVisible()
+    // 首次使用时显示透明空白页以启动 WebView2 导航；不显示任何内容、不启动隐藏计时
+    void EnsureInitialized()
     {
-        if (IsDisposed || Disposing) return false;
+        if (_everShown || IsDisposed || Disposing) return;
+        try
+        {
+            RememberFocus();
+            Show();
+            _everShown = true;
+            RestoreFocusIfStolen();
+            try { BeginInvoke((Action)RestoreFocusIfStolen); } catch { }
+        }
+        catch { }
+    }
+
+    // 内容已真正投递后再显示窗口；首次初始化时窗口已可见，此时是 no-op
+    void PresentWindow()
+    {
+        if (IsDisposed || Disposing) return;
         try
         {
             if (!Visible)
@@ -187,9 +232,44 @@ class OverlayForm : Form
                 RestoreFocusIfStolen();
                 try { BeginInvoke((Action)RestoreFocusIfStolen); } catch { }
             }
-            return true;
+            else
+            {
+                RestoreFocusIfStolen();
+            }
+            _everShown = true;
         }
-        catch { return false; }
+        catch { }
+    }
+
+    void ArmHideTimer()
+    {
+        if (_hideTimer == null)
+        {
+            _hideTimer = new Timer();
+            _hideTimer.Tick += delegate
+            {
+                _hideTimer.Stop();
+                _wantVisible = false;
+                _wantKind = "";
+                ClearContent();
+                HideSafely();
+            };
+        }
+        _hideTimer.Stop();
+        _hideTimer.Interval = Math.Max(300, _toastDurationMs);
+        _hideTimer.Start();
+    }
+
+    void StopHideTimer()
+    {
+        if (_hideTimer != null) _hideTimer.Stop();
+    }
+
+    // 隐藏前清空旧 DOM：下次显示新 Toast 时不会闪出上一条内容
+    void ClearContent()
+    {
+        if (!_ready) return;
+        PostRaw("{\"kind\":\"clear\",\"data\":{}}");
     }
 
     static bool FocusInOverlay(IntPtr h)
@@ -289,6 +369,8 @@ class OverlayForm : Form
                     }
                     else if (m.Action == "eggDone")
                     {
+                        _wantVisible = false;
+                        _wantKind = "";
                         HideSafely();
                     }
                 }
@@ -302,31 +384,98 @@ class OverlayForm : Form
         }
     }
 
-    void Send(Dictionary<string, object> payload)
+    bool Send(Dictionary<string, object> payload)
     {
         string json = Bridge.Serialize(payload);
-        CoreWebView2 core = WebViewCore;
-        if (_ready && core != null)
-        {
-            try
-            {
-                core.PostWebMessageAsJson(json);
-                return;
-            }
-            catch { }
-        }
+        if (_ready && PostRaw(json)) return true;
+        Enqueue(json);
+        return false;
+    }
+
+    void Enqueue(string json)
+    {
         _pending.Enqueue(json);
+        // 导航始终失败时也不能无限增长：丢弃最旧的，保留最新内容
+        while (_pending.Count > MaxPending) _pending.Dequeue();
+    }
+
+    bool PostRaw(string json)
+    {
+        CoreWebView2 core = WebViewCore;
+        if (core == null) return false;
+        try
+        {
+            core.PostWebMessageAsJson(json);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    bool PostHud(string text)
+    {
+        Dictionary<string, object> data = new Dictionary<string, object>();
+        data["text"] = text;
+        Dictionary<string, object> msg = new Dictionary<string, object>();
+        msg["kind"] = "hud";
+        msg["data"] = data;
+        return PostRaw(Bridge.Serialize(msg));
+    }
+
+    bool PostHudHide()
+    {
+        Dictionary<string, object> msg = new Dictionary<string, object>();
+        msg["kind"] = "hud-hide";
+        msg["data"] = new Dictionary<string, object>();
+        return PostRaw(Bridge.Serialize(msg));
     }
 
     void Flush()
     {
-        CoreWebView2 core = WebViewCore;
-        if (core == null) return;
-        while (_pending.Count > 0)
+        try
         {
-            string json = _pending.Dequeue();
-            try { core.PostWebMessageAsJson(json); }
-            catch { }
+            bool hadContent = _contentPending;
+            while (_pending.Count > 0)
+            {
+                string json = _pending.Dequeue();
+                PostRaw(json);
+            }
+            _contentPending = false;
+
+            // 内容消息确实投递成功后才显示并启动隐藏计时；
+            // 如果在此期间已被新一轮操作取代/取消，则不再显示。
+            if (hadContent && _wantVisible)
+            {
+                if (_wantKind == "toast")
+                {
+                    PresentWindow();
+                    ArmHideTimer();
+                }
+                else if (_wantKind == "egg")
+                {
+                    PresentWindow();
+                }
+            }
+
+            // HUD 只按最终状态投递一次：按下期间已松开则不投递 hud/hud-hide，
+            // 绝不让一次已结束的长按显示 HUD。
+            if (_hudWantVisible)
+            {
+                if (PostHud(_hudText))
+                {
+                    _hudVisible = true;
+                    PresentWindow();
+                }
+            }
+            else if (_hudVisible)
+            {
+                PostHudHide();
+                _hudVisible = false;
+                HideSafely();
+            }
+        }
+        catch
+        {
+            // 悬浮窗任何失败都只降级为静默
         }
     }
 
@@ -334,6 +483,9 @@ class OverlayForm : Form
     {
         if (disposing)
         {
+            _wantVisible = false;
+            _hudWantVisible = false;
+            _hudVisible = false;
             if (_hideTimer != null)
             {
                 _hideTimer.Stop();

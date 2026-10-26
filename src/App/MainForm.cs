@@ -422,8 +422,14 @@ class MainForm : Form
         {
             Rectangle area = Screen.PrimaryScreen.WorkingArea;
             int w = forEgg ? EggWidth : ToastWidth;
-            int h = forEgg ? EggHeight : ToastHeight;
-            Rectangle bounds = new Rectangle(area.Right - w - 20, area.Top + 20, w, h);
+            // 屏幕较矮时压缩彩蛋窗口并上移，保证完整落在工作区内
+            int h = forEgg ? Math.Min(EggHeight, Math.Max(ToastHeight, area.Height - 40)) : ToastHeight;
+            int x = area.Right - w - 20;
+            if (x < area.Left + 8) x = area.Left + 8;
+            int y = area.Top + 20;
+            if (y + h > area.Bottom - 8) y = area.Bottom - h - 8;
+            if (y < area.Top + 8) y = area.Top + 8;
+            Rectangle bounds = new Rectangle(x, y, w, h);
 
             if (_toastWin == null || _toastWin.IsDisposed)
             {
