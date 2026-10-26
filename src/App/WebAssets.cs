@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 
 static class WebAssets
@@ -26,14 +27,17 @@ static class WebAssets
 
     public static string Extract(string version)
     {
-        string root = Path.Combine(
+        string parent = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "RMBCK", "web", version);
+            "RMBCK", "web");
+        string cacheName = (version == null ? "0" : version) + "-" + ComputeHash8();
+        string root = Path.Combine(parent, cacheName);
         string marker = Path.Combine(root, ".ready");
         if (File.Exists(marker)) return root;
 
         Directory.CreateDirectory(root);
         Assembly asm = Assembly.GetExecutingAssembly();
+        bool complete = true;
         foreach (var kv in Map)
         {
             string target = Path.Combine(root, kv.Value.Replace('/', Path.DirectorySeparatorChar));
@@ -41,12 +45,66 @@ static class WebAssets
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
             using (Stream s = asm.GetManifestResourceStream(kv.Key))
             {
-                if (s == null) continue;
+                // 映射与嵌入资源不一致时绝不写 .ready，下次启动会重试
+                if (s == null) { complete = false; break; }
                 using (FileStream fs = File.Create(target)) s.CopyTo(fs);
             }
         }
-        File.WriteAllText(marker, version);
+        if (!complete) return root;
+
+        File.WriteAllText(marker, cacheName);
+        CleanupSiblings(parent, root);
         return root;
+    }
+
+    // 前端资源内容哈希（按资源名排序，保证同一构建结果稳定）
+    static string ComputeHash8()
+    {
+        var names = new List<string>(Map.Keys);
+        names.Sort(StringComparer.Ordinal);
+        Assembly asm = Assembly.GetExecutingAssembly();
+        using (var all = new MemoryStream())
+        {
+            for (int i = 0; i < names.Count; i++)
+            {
+                using (Stream s = asm.GetManifestResourceStream(names[i]))
+                {
+                    if (s == null) continue;
+                    s.CopyTo(all);
+                }
+            }
+            all.Position = 0;
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(all);
+                var sb = new StringBuilder(8);
+                for (int i = 0; i < 4; i++) sb.Append(hash[i].ToString("x2"));
+                return sb.ToString();
+            }
+        }
+    }
+
+    // 只清理同级旧缓存；当前目录永不删除，所有异常忽略
+    static void CleanupSiblings(string parent, string keep)
+    {
+        try
+        {
+            string keepFull = Path.GetFullPath(keep);
+            string[] dirs = Directory.GetDirectories(parent);
+            int attempts = 0;
+            for (int i = 0; i < dirs.Length && attempts < 6; i++)
+            {
+                try
+                {
+                    string candidate = Path.GetFullPath(dirs[i]);
+                    if (string.Equals(candidate, keepFull, StringComparison.OrdinalIgnoreCase)) continue;
+                    attempts++;
+                    Directory.Delete(candidate, true);
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 
     public static string ReadText(string relativePath)

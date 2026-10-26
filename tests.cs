@@ -382,6 +382,35 @@ class TestRunner
         Assert(WebAssets.Map["RMBCK.web.assets.icon.png"] == "assets/icon.png", "assets 子目录映射正确");
         string txt = WebAssets.ReadText("index.html");
         Assert(txt != null && txt.IndexOf("<html") >= 0, "ReadText 读取 index.html");
+        Assert(txt != null && txt.IndexOf("navBtn") >= 0, "ReadText 读到前端导航骨架");
+
+        string dir = null;
+        try
+        {
+            dir = WebAssets.Extract("test");
+            string dir2 = WebAssets.Extract("test");
+            Assert(dir == dir2, "Extract 幂等：两次返回同一路径");
+            Assert(File.Exists(Path.Combine(dir, "index.html")), "Extract 输出 index.html");
+            Assert(File.Exists(Path.Combine(dir, "app.css")), "Extract 输出 app.css");
+            Assert(File.Exists(Path.Combine(dir, "app.js")), "Extract 输出 app.js");
+            Assert(File.Exists(Path.Combine(dir, "overlay.html")), "Extract 输出 overlay.html");
+            Assert(File.Exists(Path.Combine(dir, "assets", "icon.png")), "Extract 输出 assets/icon.png");
+            Assert(File.Exists(Path.Combine(dir, ".ready")), "Extract 写入 .ready 标记");
+
+            string leaf = Path.GetFileName(dir);
+            bool hashOk = leaf.Length == "test-".Length + 8 &&
+                leaf.StartsWith("test-", StringComparison.Ordinal);
+            for (int i = "test-".Length; hashOk && i < leaf.Length; i++)
+            {
+                char c = leaf[i];
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) hashOk = false;
+            }
+            Assert(hashOk, "缓存目录名为 test-<8 位小写内容哈希>");
+        }
+        finally
+        {
+            if (dir != null) { try { Directory.Delete(dir, true); } catch { } }
+        }
     }
 
     static void TestBridge()
