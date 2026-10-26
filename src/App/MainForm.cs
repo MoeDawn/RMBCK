@@ -399,21 +399,41 @@ class MainForm : Form
             System.Threading.ThreadPool.QueueUserWorkItem(delegate
             {
                 // schtasks 最长 8s，绝不能在 UI 线程同步执行
-                bool ok = Autostart.SetEnabled(on);
+                bool ok = false;
+                Exception error = null;
                 try
                 {
-                    BeginInvoke((Action)delegate
-                    {
-                        if (IsDisposed) return;
-                        _autostartBusy = false;
-                        _autostartGen++;   // 作废操作期间启动的查询
-                        if (ok) _autostartCached = on;   // 只有成功才更新缓存
-                        ShowToast(ok ? (on ? "已开启开机自启" : "已关闭开机自启") : "操作失败（需要管理员权限）",
-                            ok ? "ok" : "err", 1800);
-                        PushState();
-                    });
+                    ok = Autostart.SetEnabled(on);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    error = ex;
+                }
+                finally
+                {
+                    // 成功/失败/异常都必须回 UI 线程清掉忙碌标志，否则开关会永久卡住
+                    try
+                    {
+                        BeginInvoke((Action)delegate
+                        {
+                            if (IsDisposed) return;
+                            _autostartBusy = false;
+                            _autostartGen++;   // 作废操作期间启动的查询
+                            if (error != null)
+                            {
+                                ShowToast("操作失败：" + error.Message, "err", 1800);
+                            }
+                            else
+                            {
+                                if (ok) _autostartCached = on;   // 只有成功才更新缓存
+                                ShowToast(ok ? (on ? "已开启开机自启" : "已关闭开机自启") : "操作失败（需要管理员权限）",
+                                    ok ? "ok" : "err", 1800);
+                            }
+                            PushState();
+                        });
+                    }
+                    catch { }
+                }
             });
             return;
         }
@@ -853,14 +873,35 @@ class MainForm : Form
         catch { _hotkeyFailed = true; }
     }
 
+    // 幂等：窗口销毁后再调用也不抛异常；OnFormClosing 与 OnFormClosed 都会调用
+    void ReleaseHotkey()
+    {
+        try { if (_hotkey != null && IsHandleCreated) _hotkey.Unregister(Handle, HotkeyId); } catch { }
+    }
+
     // 注册新热键；失败时 HotkeyManager 会自动恢复旧注册，这里返回 false 让调用方保留旧设置
     bool TryApplyHotkey(uint mods, uint vk)
     {
         if (_hotkey == null)
         {
-            // 句柄尚未创建：只更新设置，OnHandleCreated 时统一注册
-            _rt.Settings.HotkeyMods = mods;
-            _rt.Settings.HotkeyVk = vk;
+            // 句柄未创建时无法注册，交给 OnHandleCreated；绝不能在未注册时报告成功
+            if (!IsHandleCreated) return false;
+            HotkeyManager mgr = new HotkeyManager(mods, vk);
+            try
+            {
+                if (!mgr.Register(Handle, HotkeyId, mods, vk))
+                {
+                    mgr.Dispose();
+                    return false;   // 失败时 Settings 保持不变
+                }
+            }
+            catch
+            {
+                mgr.Dispose();
+                return false;
+            }
+            _hotkey = mgr;
+            _hotkeyFailed = false;
             return true;
         }
         try
@@ -1285,6 +1326,8 @@ class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        // 当前版本关闭窗口即退出（Task 13 托盘上线后应只在真正退出分支调用）
+        ReleaseHotkey();
         // 捕获不能随窗口关闭而残留；钩子会在 OnFormClosed 中卸载
         if (_capturing) EndCapture();
         // 防抖静默期内关窗不丢数据
@@ -1299,7 +1342,7 @@ class MainForm : Form
         if (_gateTimer != null) { _gateTimer.Stop(); _gateTimer.Dispose(); }
         if (_testTimer != null) { _testTimer.Stop(); _testTimer.Dispose(); }
         if (_saveTimer != null) { _saveTimer.Stop(); _saveTimer.Dispose(); }
-        try { if (_hotkey != null && IsHandleCreated) _hotkey.Unregister(Handle, HotkeyId); } catch { }
+        ReleaseHotkey();   // 幂等兜底
         if (_rt.KbHook != null) { _rt.KbHook.Dispose(); _rt.KbHook = null; }
         if (_skeleton != null) _skeleton.Visible = false;
         if (_skeletonLogo != null) { _skeletonLogo.Dispose(); _skeletonLogo = null; }
