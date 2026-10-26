@@ -33,7 +33,7 @@ static class Bootstrap
         {
             AppSettings old = ConfigStore.LoadProfile(ptrPath);
             s = old;
-            s.Profile = "默认";
+            s.Profile = AppSettings.DefaultProfileName;
             s.CloseAction = "Ask";
             string dir = string.IsNullOrEmpty(s.ConfigFolder) ? exeDir : s.ConfigFolder;
             try

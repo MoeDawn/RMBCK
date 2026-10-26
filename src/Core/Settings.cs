@@ -18,11 +18,13 @@ class KeyConfig
 
 class AppSettings
 {
+    public const string DefaultProfileName = "默认";
+
     public int LongPressMs = 300;
     public string ConfigFolder = "";
     public bool Enabled = true;
     public string TargetProcess = "";
-    public string Profile = "默认";
+    public string Profile = DefaultProfileName;
     public string CloseAction = "Ask";
     public bool BlockCtrl = true;
     public bool BlockShift = true;

@@ -30,9 +30,13 @@ static class Autostart
             psi.RedirectStandardError = true;
             using (Process p = Process.Start(psi))
             {
+                if (!p.WaitForExit(timeoutMs))
+                {
+                    try { p.Kill(); } catch { }
+                    return false;
+                }
                 p.StandardOutput.ReadToEnd();
                 p.StandardError.ReadToEnd();
-                p.WaitForExit(timeoutMs);
                 return p.ExitCode == 0;
             }
         }

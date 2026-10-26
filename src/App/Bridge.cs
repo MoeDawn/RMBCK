@@ -58,6 +58,10 @@ static class Bridge
         object v = Get(d, key, null);
         if (v == null) return fallback;
         if (v is bool) return (bool)v;
+        if (v is int || v is long || v is double)
+        {
+            try { return Convert.ToInt32(v) != 0; } catch { return fallback; }
+        }
         bool b;
         return bool.TryParse(Convert.ToString(v), out b) ? b : fallback;
     }

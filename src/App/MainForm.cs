@@ -11,6 +11,9 @@ class MainForm : Form
     readonly AppRuntime _rt;
     WebView2 _wv;
     bool _ready;
+    bool _pageReady;
+    bool _autostartCached;
+    volatile bool _autostartRefreshing;
 
     public MainForm(AppRuntime rt)
     {
@@ -81,6 +84,7 @@ class MainForm : Form
             core.Settings.IsStatusBarEnabled = false;
             core.NewWindowRequested += delegate(object s, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; };
             core.SetVirtualHostNameToFolderMapping("rmbck.local", _rt.WebDir, CoreWebView2HostResourceAccessKind.Allow);
+            core.NavigationStarting += delegate { _pageReady = false; };
             core.WebMessageReceived += delegate(object s, CoreWebView2WebMessageReceivedEventArgs e)
             {
                 string json = null;
@@ -91,7 +95,12 @@ class MainForm : Form
                 try { OnAction(m); }
                 catch (Exception ex) { ShowToast("操作失败：" + ex.Message, "err", 2000); }
             };
-            core.NavigationCompleted += delegate { _ready = true; PushState(); };
+            core.NavigationCompleted += delegate
+            {
+                _ready = true;
+                if (_pageReady) PushState();
+            };
+            RefreshAutostartAsync();
             core.Navigate("https://rmbck.local/index.html");
         }
         catch (Exception ex)
@@ -105,46 +114,74 @@ class MainForm : Form
     public void PushState()
     {
         if (!_ready) return;
-        var s = _rt.Settings;
-        var d = new Dictionary<string, object>();
-        d["enabled"] = s.Enabled;
-        d["longPressMs"] = s.LongPressMs;
-        d["randomJitter"] = s.RandomJitter;
-        d["profile"] = s.Profile;
-        d["profiles"] = ConfigStore.ListProfiles(ProfileDir());
-        d["targetProcess"] = s.TargetProcess;
-        d["configFolder"] = ProfileDir();
-        d["blockCtrl"] = s.BlockCtrl;
-        d["blockShift"] = s.BlockShift;
-        d["blockAlt"] = s.BlockAlt;
-        d["blockWin"] = s.BlockWin;
-        d["suppressToast"] = s.SuppressToast;
-        d["suppressEgg"] = s.SuppressEgg;
-        d["suppressHud"] = s.SuppressHud;
-        d["suppressHotkeyToast"] = s.SuppressHotkeyToast;
-        d["headerAnim"] = s.HeaderAnim;
-        d["theme"] = s.Theme;
-        d["hotkey"] = HotkeyManager.Describe(s.HotkeyMods, s.HotkeyVk);
-        d["autostart"] = Autostart.IsEnabled();
-        d["eggBoost"] = s.EggBoost;
-        var arr = new List<object>();
-        for (int i = 0; i < s.Keys.Count; i++)
+        try
         {
-            var kc = s.Keys[i];
-            var o = new Dictionary<string, object>();
-            o["index"] = i;
-            o["enabled"] = kc.Enabled;
-            o["name"] = kc.Name;
-            o["mode"] = kc.Mode.ToString();
-            o["mods"] = kc.Mods;
-            o["repeat"] = kc.RepeatIntervalMs;
-            o["delay"] = kc.DelayMs;
-            arr.Add(o);
+            var s = _rt.Settings;
+            var d = new Dictionary<string, object>();
+            d["enabled"] = s.Enabled;
+            d["longPressMs"] = s.LongPressMs;
+            d["randomJitter"] = s.RandomJitter;
+            d["profile"] = s.Profile;
+            d["profiles"] = ConfigStore.ListProfiles(ProfileDir());
+            d["targetProcess"] = s.TargetProcess;
+            d["configFolder"] = ProfileDir();
+            d["blockCtrl"] = s.BlockCtrl;
+            d["blockShift"] = s.BlockShift;
+            d["blockAlt"] = s.BlockAlt;
+            d["blockWin"] = s.BlockWin;
+            d["suppressToast"] = s.SuppressToast;
+            d["suppressEgg"] = s.SuppressEgg;
+            d["suppressHud"] = s.SuppressHud;
+            d["suppressHotkeyToast"] = s.SuppressHotkeyToast;
+            d["headerAnim"] = s.HeaderAnim;
+            d["theme"] = s.Theme;
+            d["hotkey"] = HotkeyManager.Describe(s.HotkeyMods, s.HotkeyVk);
+            d["autostart"] = _autostartCached;
+            d["eggBoost"] = s.EggBoost;
+            var arr = new List<object>();
+            for (int i = 0; i < s.Keys.Count; i++)
+            {
+                var kc = s.Keys[i];
+                var o = new Dictionary<string, object>();
+                o["index"] = i;
+                o["enabled"] = kc.Enabled;
+                o["name"] = kc.Name;
+                o["mode"] = kc.Mode.ToString();
+                o["mods"] = kc.Mods;
+                o["repeat"] = kc.RepeatIntervalMs;
+                o["delay"] = kc.DelayMs;
+                arr.Add(o);
+            }
+            d["keys"] = arr.ToArray();
+            d["conflicts"] = FindConflicts();
+            d["keyNames"] = KeyNames.CommonKeys;
+            Send("state", d);
         }
-        d["keys"] = arr.ToArray();
-        d["conflicts"] = FindConflicts();
-        d["keyNames"] = KeyNames.CommonKeys;
-        Send("state", d);
+        catch { }
+    }
+
+    // schtasks 查询放在线程池，完成后回到 UI 线程更新缓存并推送状态
+    void RefreshAutostartAsync()
+    {
+        if (_autostartRefreshing) return;
+        _autostartRefreshing = true;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate
+        {
+            bool enabled = Autostart.IsEnabled();
+            try
+            {
+                BeginInvoke((Action)delegate
+                {
+                    _autostartCached = enabled;
+                    _autostartRefreshing = false;
+                    if (!IsDisposed) PushState();
+                });
+            }
+            catch
+            {
+                _autostartRefreshing = false;
+            }
+        });
     }
 
     public string ProfileDir()
@@ -191,12 +228,27 @@ class MainForm : Form
         var s = _rt.Settings;
         string a = m.Action;
 
-        if (a == "ready") { PushState(); return; }
+        if (a == "ready")
+        {
+            _pageReady = true;
+            PushState();
+            RefreshAutostartAsync();
+            return;
+        }
         if (a == "dragStart") { BeginDrag(); return; }
         if (a == "minimizeToTray" || a == "closeRequest")
         {
             // Task 13 实现真正的托盘/关闭逻辑
             ShowToast("该功能将在后续版本启用", "info", 1200);
+            return;
+        }
+        if (a == "setAutostart")
+        {
+            bool on = Bridge.GetBool(m.Args, "on", !_autostartCached);
+            bool ok = Autostart.SetEnabled(on);
+            ShowToast(ok ? (on ? "已开启开机自启" : "已关闭开机自启") : "操作失败（需要管理员权限）",
+                ok ? "ok" : "err", 1800);
+            RefreshAutostartAsync();
             return;
         }
 
@@ -230,7 +282,7 @@ class MainForm : Form
         if (a == "deleteProfile")
         {
             string name = Bridge.GetStr(m.Args, "name", "");
-            if (name.Length > 0 && name == s.Profile) s.Profile = "默认";
+            if (name.Length > 0 && name == s.Profile) s.Profile = AppSettings.DefaultProfileName;
             PushState();
             return;
         }

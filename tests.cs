@@ -404,6 +404,22 @@ class TestRunner
 
         string json = Bridge.Serialize(new Dictionary<string, object> { { "ok", true }, { "n", 3 } });
         Assert(json.IndexOf("\"ok\":true") >= 0 && json.IndexOf("\"n\":3") >= 0, "序列化对象");
+
+        Assert(Bridge.Parse("[1,2]") == null, "数组 JSON 返回 null");
+        Assert(Bridge.Parse("null") == null, "null JSON 返回 null");
+        Assert(Bridge.Parse("123") == null, "数字 JSON 返回 null");
+
+        var bools = new Dictionary<string, object>
+        {
+            { "t", true }, { "f", false }, { "ts", "true" }, { "one", 1 }, { "zero", 0 }
+        };
+        Assert(Bridge.GetBool(bools, "t", false), "GetBool 解析 true");
+        Assert(!Bridge.GetBool(bools, "f", true), "GetBool 解析 false");
+        Assert(Bridge.GetBool(bools, "ts", false), "GetBool 解析字符串 true");
+        Assert(Bridge.GetBool(bools, "one", false), "GetBool 解析数字 1");
+        Assert(!Bridge.GetBool(bools, "zero", true), "GetBool 解析数字 0");
+        Assert(Bridge.GetBool(bools, "missing", true), "GetBool 缺失键回退 true");
+        Assert(!Bridge.GetBool(bools, "missing", false), "GetBool 缺失键回退 false");
     }
 }
 
