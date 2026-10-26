@@ -1368,6 +1368,9 @@ class MainForm : Form
         KeyPreview = true;
         Text = "右键长按联动器";
 
+        // 6px 原生缩放边：WebView2 若铺满整个客户区，其子 HWND 会吞掉边缘的
+        // WM_NCHITTEST，窗体永远收不到命中测试 → 无法拖动缩放。必须留出 padding。
+        Padding = new Padding(BORDER);
         _wv = new WebView2();
         _wv.Dock = DockStyle.Fill;
         Controls.Add(_wv);
@@ -1450,8 +1453,12 @@ class MainForm : Form
             base.WndProc(ref m);
             if ((int)m.Result == HTCLIENT)
             {
-                Point p = PointToClient(new Point(m.LParam.ToInt32() & 0xFFFF,
-                    (m.LParam.ToInt32() >> 16) & 0xFFFF));
+                // lParam 里是两个**有符号** 16 位坐标；负坐标（副屏在主屏左上）必须按 short 解码，
+                // 且不能直接 ToInt32()（低 32 位 bit31 置位时 .NET Framework 会抛 OverflowException）
+                long lp = m.LParam.ToInt64();
+                short sx = unchecked((short)(lp & 0xFFFF));
+                short sy = unchecked((short)((lp >> 16) & 0xFFFF));
+                Point p = PointToClient(new Point(sx, sy));
                 int w = ClientSize.Width, h = ClientSize.Height;
                 bool l = p.X <= BORDER, r = p.X >= w - BORDER;
                 bool t = p.Y <= BORDER, b = p.Y >= h - BORDER;

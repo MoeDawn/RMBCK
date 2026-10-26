@@ -136,7 +136,10 @@ RMBCK 2.0.0.exe  (C# 外壳：全部状态与逻辑)
 **窗口交互**：
 - 拖拽：标题栏 `mousedown` → 发 `dragStart` → C# `ReleaseCapture()` +
   `SendMessage(WM_NCLBUTTONDOWN, HTCAPTION)`
-- 缩放：`WM_NCHITTEST` 在四周 6px 返回对应 HT* 命中码
+- 缩放：`WM_NCHITTEST` 在四周 6px 返回对应 HT* 命中码。**WebView2 必须用
+  `Padding = 6px` 内缩**，否则其子 HWND 吞掉边缘命中测试，缩放完全失效；
+  `lParam` 坐标按**有符号 short** 解码（副屏负坐标），且不可直接 `ToInt32()`
+  （bit31 置位时 .NET 4 抛 `OverflowException`）
 - 圆角：Win11 用 DWM 系统圆角；Win10 用窗体 Region
 - 最小化按钮 → 收到托盘（沿用 1.1.0 行为，任务栏隐藏）
 
