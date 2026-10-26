@@ -499,6 +499,73 @@ class MainForm : Form
             CancelCapture();
             return;
         }
+
+        // ---- 进程页动作 ----
+        if (a == "refreshProcesses") { PopulateProcesses(); return; }
+        if (a == "selectProcess")
+        {
+            s.TargetProcess = Bridge.GetStr(m.Args, "name", "");
+            _lastInTargetInit = false;
+            SaveSettings();
+            ApplyLinkageGate();
+            PushState();
+            return;
+        }
+    }
+
+    // ---- 进程枚举 ----
+    // GetProcesses + 每进程 MainWindowTitle 需要 100ms~2s，绝不能在 UI 线程执行：
+    // 线程池收集 → BeginInvoke 回传；_procGen 丢弃被后续刷新取代的过期结果。
+    int _procGen;
+
+    void PopulateProcesses()
+    {
+        int gen = ++_procGen;
+        string sel = _rt.Settings.TargetProcess;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
+        {
+            List<ProcessItem> list = CollectProcesses();
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    if (gen != _procGen || IsDisposed) return;
+                    ApplyProcessList(list, sel);
+                });
+            }
+            catch { }
+        });
+    }
+
+    static List<ProcessItem> CollectProcesses()
+    {
+        var list = new List<ProcessItem>();
+        System.Diagnostics.Process[] procs = null;
+        try { procs = System.Diagnostics.Process.GetProcesses(); }
+        catch { return list; }
+        foreach (System.Diagnostics.Process p in procs)
+        {
+            try
+            {
+                if (p.MainWindowHandle != IntPtr.Zero && !string.IsNullOrEmpty(p.MainWindowTitle))
+                    list.Add(new ProcessItem { Name = p.ProcessName, Display = p.MainWindowTitle });
+            }
+            catch { }
+            finally { try { p.Dispose(); } catch { } }
+        }
+        list.Sort(delegate(ProcessItem a, ProcessItem b)
+        {
+            return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        });
+        return list;
+    }
+
+    void ApplyProcessList(List<ProcessItem> list, string selected)
+    {
+        var arr = new List<object>();
+        foreach (var it in list)
+            arr.Add(new Dictionary<string, object> { { "name", it.Name }, { "title", it.Display } });
+        Send("processes", arr.ToArray());
     }
 
     void ApplySetting(string key, Dictionary<string, object> args)
@@ -1058,4 +1125,10 @@ class MainForm : Form
         if (_skeletonLogo != null) { _skeletonLogo.Dispose(); _skeletonLogo = null; }
         base.OnFormClosed(e);
     }
+}
+
+class ProcessItem
+{
+    public string Name;
+    public string Display;
 }

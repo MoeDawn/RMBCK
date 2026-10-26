@@ -183,3 +183,21 @@ input[type=text], input[type=number], select {
 #page-keys input:focus-visible, #page-keys select:focus-visible {
   outline: 2px solid var(--sel); outline-offset: 1px; border-color: var(--accent2);
 }
+
+/* ---------- 进程页 ---------- */
+.currentTarget { margin-top: 10px; }
+.procList { margin-top: 12px; display: flex; flex-direction: column; gap: 4px;
+  max-height: 360px; overflow-y: auto; }
+.procItem { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px;
+  border-radius: 10px; border: 1px solid transparent; cursor: pointer; }
+.procItem:hover { background: var(--cardHi); border-color: var(--line); }
+.procItem.selected { background: var(--sel); border-color: var(--accent); }
+.procItem b { font-size: 12px; font-weight: 600; flex: 0 0 auto; }
+.procItem .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; }
+.empty { padding: 14px 4px; }
+.procLoading { padding: 8px 4px; }
+#page-process .btn:disabled { opacity: .5; cursor: not-allowed; }
+#page-process input[type=text]:focus-visible {
+  outline: 2px solid var(--sel); outline-offset: 1px; border-color: var(--accent2);
+}

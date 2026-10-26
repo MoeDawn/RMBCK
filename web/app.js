@@ -395,6 +395,92 @@
     if (btn) btn.textContent = window.__testing ? "停止测试" : "开始测试";
   };
 
+  // ---------- 进程页 ----------
+  // 搜索在本地过滤已拉取的数组，不向 C# 发请求；查询串与加载态挂在 window 上，
+  // 这样 state/processes 推送触发的重绘不会清掉用户输入或“正在枚举…”提示。
+  window.render_process = function (s) {
+    var p = document.getElementById("page-process");
+    if (!p) return;
+
+    var prev = document.getElementById("procSearch");
+    var hadFocus = !!prev && document.activeElement === prev;
+    var caret = hadFocus ? prev.selectionStart : 0;
+
+    p.innerHTML = "";
+
+    var card = el("div", "card");
+    card.appendChild(el("h3", null, "联动目标进程"));
+    card.appendChild(el("div", "muted", "选中后仅当该进程窗口在前台时才触发联动；未选择则全局生效。"));
+
+    var row = el("div", "row");
+    var search = el("input");
+    search.type = "text";
+    search.id = "procSearch";
+    search.placeholder = "搜索进程名…";
+    search.setAttribute("aria-label", "搜索进程名或窗口标题");
+    search.style.flex = "1";
+    search.value = window.__procQuery || "";
+    var refresh = el("button", "btn", "刷新");
+    refresh.id = "procRefreshBtn";
+    refresh.disabled = !!window.__procLoading;
+    var clear = el("button", "btnGhost", "清除限制");
+    row.appendChild(search); row.appendChild(refresh); row.appendChild(clear);
+    card.appendChild(row);
+
+    var cur = el("div", "muted currentTarget",
+      "当前：" + (s.targetProcess || "未限制（全局生效）"));
+    cur.id = "procCurrent";
+    card.appendChild(cur);
+
+    var listBox = el("div", "procList");
+    listBox.id = "procListBox";
+    card.appendChild(listBox);
+
+    function paint() {
+      listBox.innerHTML = "";
+      var procs = window.__processes || [];
+      var loading = !!window.__procLoading;
+      var fetched = !!window.__procFetched;
+      var q = (window.__procQuery || "").toLowerCase();
+      if (loading) listBox.appendChild(el("div", "muted procLoading", "正在枚举…"));
+      var n = 0;
+      procs.forEach(function (it) {
+        var name = it && it.name != null ? String(it.name) : "";
+        var title = it && it.title != null ? String(it.title) : "";
+        if (q && name.toLowerCase().indexOf(q) < 0 && title.toLowerCase().indexOf(q) < 0) return;
+        n++;
+        var item = el("div", "procItem" + (name === s.targetProcess ? " selected" : ""));
+        item.appendChild(el("b", null, name));
+        item.appendChild(el("span", "muted", title));
+        item.onclick = function () { send("selectProcess", { name: name }); };
+        listBox.appendChild(item);
+      });
+      if (!n && !loading) {
+        listBox.appendChild(el("div", "muted empty",
+          !fetched ? "点「刷新」加载进程列表" : (q ? "无匹配结果" : "无可见窗口进程")));
+      }
+    }
+
+    search.oninput = function () {
+      window.__procQuery = search.value;
+      paint();
+    };
+    refresh.onclick = function () {
+      window.__procLoading = true;
+      send("refreshProcesses", {});
+      render();   // 立即进入禁用/正在枚举状态
+    };
+    clear.onclick = function () { send("selectProcess", { name: "" }); };
+
+    p.appendChild(card);
+    paint();
+
+    if (hadFocus) {
+      search.focus();
+      try { search.setSelectionRange(caret, caret); } catch (e) { }
+    }
+  };
+
   function promptProfileName() {
     var w = $("modalWrap");
     w.innerHTML = "";
@@ -495,7 +581,9 @@
       else if (msg.type === "toast") { toast(data && data.text, data && data.kind, data && data.ms); }
       else if (msg.type === "askClose") { showCloseModal(); }
       else if (msg.type === "processes") {
-        window.__processes = data;
+        window.__processes = data || [];
+        window.__procFetched = true;
+        window.__procLoading = false;   // 枚举结束：恢复刷新按钮
         if (page === "process") render();
       }
       else if (msg.type === "history") {
