@@ -17,23 +17,23 @@
       </div>
     </div>
     <nav id="nav">
-      <button class="navBtn active" data-page="overview"><i>◈</i>概览</button>
-      <button class="navBtn" data-page="keys"><i>⌨</i>按键</button>
-      <button class="navBtn" data-page="process"><i>◉</i>进程</button>
-      <button class="navBtn" data-page="history"><i>≡</i>日志</button>
-      <button class="navBtn" data-page="settings"><i>⚙</i>设置</button>
+      <button class="navBtn active" data-page="overview" aria-label="概览"><i aria-hidden="true">◈</i>概览</button>
+      <button class="navBtn" data-page="keys" aria-label="按键"><i aria-hidden="true">⌨</i>按键</button>
+      <button class="navBtn" data-page="process" aria-label="进程"><i aria-hidden="true">◉</i>进程</button>
+      <button class="navBtn" data-page="history" aria-label="日志"><i aria-hidden="true">≡</i>日志</button>
+      <button class="navBtn" data-page="settings" aria-label="设置"><i aria-hidden="true">⚙</i>设置</button>
     </nav>
     <div class="sideFoot">
-      <span id="statusChip" class="chip off">已禁用</span>
+      <span id="statusChip" class="chip off" aria-live="polite">已禁用</span>
     </div>
   </aside>
 
   <main class="content">
     <header class="titlebar" id="titlebar">
       <div class="tbSpace"></div>
-      <button class="winBtn" id="btnTheme" title="切换主题">◐</button>
-      <button class="winBtn" id="btnMin" title="最小化到托盘">—</button>
-      <button class="winBtn close" id="btnClose" title="关闭">✕</button>
+      <button class="winBtn" id="btnTheme" title="切换主题" aria-label="切换主题"><span aria-hidden="true">◐</span></button>
+      <button class="winBtn" id="btnMin" title="最小化到托盘" aria-label="最小化到托盘"><span aria-hidden="true">—</span></button>
+      <button class="winBtn close" id="btnClose" title="关闭" aria-label="关闭"><span aria-hidden="true">✕</span></button>
     </header>
 
     <section class="page active" id="page-overview"><div class="placeholder">（此页将在后续版本填充）</div></section>

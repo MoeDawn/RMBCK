@@ -42,7 +42,6 @@
   function render() {
     if (!state) return;
     applyTheme(state.theme);
-    $("brandVer").textContent = "v2.0.0";
     var chip = $("statusChip");
     chip.textContent = state.enabled ? "已启用" : "已禁用";
     chip.className = "chip " + (state.enabled ? "on" : "off");
@@ -65,7 +64,12 @@
     var w = $("modalWrap");
     w.innerHTML = "";
     var m = el("div", "modal");
-    m.appendChild(el("h4", null, "关闭窗口"));
+    m.setAttribute("role", "dialog");
+    m.setAttribute("aria-modal", "true");
+    m.setAttribute("aria-labelledby", "closeModalTitle");
+    var title = el("h4", null, "关闭窗口");
+    title.id = "closeModalTitle";
+    m.appendChild(title);
     m.appendChild(el("div", "muted", "你想最小化到托盘，还是完全退出程序？"));
     var acts = el("div", "actions");
     var remember = el("button", "btnGhost", "记住我的选择");
@@ -88,6 +92,7 @@
     m.appendChild(acts);
     w.appendChild(m);
     w.classList.add("show");
+    b1.focus();
   }
   window.__showCloseModal = showCloseModal;
 
@@ -116,8 +121,21 @@
   $("btnMin").onclick = function () { send("minimizeToTray"); };
   $("btnClose").onclick = function () { send("closeRequest"); };
   $("titlebar").addEventListener("mousedown", function (e) {
-    if (e.target.classList && e.target.classList.contains("winBtn")) return;
+    var t = e.target;
+    if (t && t.closest && t.closest(".winBtn")) return;
     if (e.button === 0) send("dragStart");
+  });
+
+  var modalWrap = $("modalWrap");
+  modalWrap.addEventListener("click", function (e) {
+    if (e.target === modalWrap) modalWrap.classList.remove("show");
+  });
+  document.addEventListener("keydown", function (e) {
+    if (!modalWrap.classList.contains("show")) return;
+    if (e.key === "Escape" || e.key === "Esc") {
+      e.preventDefault();
+      modalWrap.classList.remove("show");
+    }
   });
 
   if (wv) {

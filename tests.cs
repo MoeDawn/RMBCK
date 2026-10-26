@@ -396,6 +396,11 @@ class TestRunner
             Assert(File.Exists(Path.Combine(dir, "overlay.html")), "Extract 输出 overlay.html");
             Assert(File.Exists(Path.Combine(dir, "assets", "icon.png")), "Extract 输出 assets/icon.png");
             Assert(File.Exists(Path.Combine(dir, ".ready")), "Extract 写入 .ready 标记");
+            string[] allFiles = Directory.GetFiles(dir, "*", SearchOption.AllDirectories);
+            int markerCount = 0;
+            for (int i = 0; i < allFiles.Length; i++)
+                if (string.Equals(Path.GetFileName(allFiles[i]), ".ready", StringComparison.Ordinal)) markerCount++;
+            Assert(markerCount == 1, "缓存目录内只有一个 .ready 标记（Extract 稳定）");
 
             string leaf = Path.GetFileName(dir);
             bool hashOk = leaf.Length == "test-".Length + 8 &&

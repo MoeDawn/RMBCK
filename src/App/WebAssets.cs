@@ -57,7 +57,7 @@ static class WebAssets
         return root;
     }
 
-    // 前端资源内容哈希（按资源名排序，保证同一构建结果稳定）
+    // 前端资源内容哈希（按资源名排序，并加入名称/长度框架，保证键稳定且无歧义）
     static string ComputeHash8()
     {
         var names = new List<string>(Map.Keys);
@@ -70,7 +70,14 @@ static class WebAssets
                 using (Stream s = asm.GetManifestResourceStream(names[i]))
                 {
                     if (s == null) continue;
-                    s.CopyTo(all);
+                    using (var bytes = new MemoryStream())
+                    {
+                        s.CopyTo(bytes);
+                        byte[] data = bytes.ToArray();
+                        byte[] frame = Encoding.UTF8.GetBytes(names[i] + "\n" + data.Length + "\n");
+                        all.Write(frame, 0, frame.Length);
+                        all.Write(data, 0, data.Length);
+                    }
                 }
             }
             all.Position = 0;
@@ -84,12 +91,13 @@ static class WebAssets
         }
     }
 
-    // 只清理同级旧缓存；当前目录永不删除，所有异常忽略
+    // 只清理 7 天以上未更新的同级旧缓存；当前目录与近期缓存永不删除，所有异常忽略
     static void CleanupSiblings(string parent, string keep)
     {
         try
         {
             string keepFull = Path.GetFullPath(keep);
+            DateTime cutoff = DateTime.UtcNow.AddDays(-7);
             string[] dirs = Directory.GetDirectories(parent);
             int attempts = 0;
             for (int i = 0; i < dirs.Length && attempts < 6; i++)
@@ -98,6 +106,7 @@ static class WebAssets
                 {
                     string candidate = Path.GetFullPath(dirs[i]);
                     if (string.Equals(candidate, keepFull, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (Directory.GetLastWriteTimeUtc(candidate) >= cutoff) continue;
                     attempts++;
                     Directory.Delete(candidate, true);
                 }
