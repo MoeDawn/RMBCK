@@ -18,6 +18,7 @@ class TestRunner
         TestSendInput();
         TestConfigStore();
         TestTriggerController();
+        TestTriggerDelayAndMods();
         if (_fail > 0) { Console.WriteLine(_fail + " 个测试失败"); return 1; }
         Console.WriteLine("全部通过"); return 0;
     }
@@ -265,6 +266,72 @@ class TestRunner
         c13.OnTick(600);
         Assert(rec13.Calls.Count == 0, "修饰键中途松开，本次按住仍不触发");
         c13.OnRightUp();
+    }
+
+    static void TestTriggerDelayAndMods()
+    {
+        Section("TriggerController 行延迟 / 组合键");
+
+        // 行延迟：阈值 300 + DelayMs 200 -> 500ms 才 KeyDown
+        var r1 = new RecordingKeySender();
+        var d1 = new TriggerController(r1, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold, DelayMs = 200 } }, 300, true);
+        d1.OnRightDown(0); d1.OnTick(300);
+        Assert(r1.Calls.Count == 0, "行延迟未到不触发");
+        d1.OnTick(499);
+        Assert(r1.Calls.Count == 0, "行延迟 499ms 仍未触发");
+        d1.OnTick(500);
+        Assert(r1.Calls.Count == 1 && r1.Calls[0] == "D81", "行延迟到点触发 KeyDown");
+        d1.OnRightUp();
+        Assert(r1.Calls.Count == 2 && r1.Calls[1] == "U81", "行延迟保持模式松开 KeyUp");
+
+        // 两行不同延迟：先到先发
+        var r2 = new RecordingKeySender();
+        var d2 = new TriggerController(r2, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.TapOnce, DelayMs = 0 },
+            new KeyConfig { Enabled = true, Name = "E", Vk = 0x45, Mode = KeyMode.TapOnce, DelayMs = 300 } }, 300, true);
+        d2.OnRightDown(0); d2.OnTick(300);
+        Assert(r2.Calls.Count == 1 && r2.Calls[0] == "T81", "0 延迟行先触发");
+        d2.OnTick(600);
+        Assert(r2.Calls.Count == 2 && r2.Calls[1] == "T69", "300 延迟行后触发");
+        d2.OnRightUp();
+
+        // 组合键：Ctrl+Q 的 TapOnce 顺序 = Ctrl 下 -> Q 下 -> Q 上 -> Ctrl 上
+        var r3 = new RecordingKeySender();
+        var d3 = new TriggerController(r3, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.TapOnce, Mods = 1 } }, 300, true);
+        d3.OnRightDown(0); d3.OnTick(300);
+        Assert(string.Join(",", r3.Calls.ToArray()) == "D17,T81,U17", "Ctrl+Q 点按顺序正确");
+        d3.OnRightUp();
+
+        // 组合键 Hold：修饰键与主键同持同放
+        var r4 = new RecordingKeySender();
+        var d4 = new TriggerController(r4, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold, Mods = 2 } }, 300, true);
+        d4.OnRightDown(0); d4.OnTick(300);
+        Assert(string.Join(",", r4.Calls.ToArray()) == "D16,D81", "Shift+Q 保持：先修饰键后主键");
+        d4.OnRightUp();
+        Assert(string.Join(",", r4.Calls.ToArray()) == "D16,D81,U81,U16", "Shift+Q 保持：先放主键再放修饰键");
+
+        // 多个 Hold 行共享修饰键：只按一次
+        var r5 = new RecordingKeySender();
+        var d5 = new TriggerController(r5, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold, Mods = 1 },
+            new KeyConfig { Enabled = true, Name = "E", Vk = 0x45, Mode = KeyMode.Hold, Mods = 1 } }, 300, true);
+        d5.OnRightDown(0); d5.OnTick(300);
+        Assert(r5.Calls.FindAll(delegate(string c) { return c == "D17"; }).Count == 1, "共享修饰键只按下一次");
+        d5.OnRightUp();
+        Assert(r5.Calls.FindAll(delegate(string c) { return c == "U17"; }).Count == 1, "共享修饰键只释放一次");
+
+        // FiredLabels 供测试面板
+        var r6 = new RecordingKeySender();
+        var d6 = new TriggerController(r6, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold } }, 300, true);
+        Assert(d6.FiredLabels != null && d6.FiredLabels.Count == 0, "未触发时 FiredLabels 为空");
+        d6.OnRightDown(0); d6.OnTick(300);
+        Assert(d6.FiredLabels.Count == 1 && d6.FiredLabels[0].IndexOf("Q") >= 0, "触发后 FiredLabels 含 Q");
+        d6.OnRightUp();
+        Assert(d6.FiredLabels.Count == 0, "松开后 FiredLabels 清空");
     }
 }
 
