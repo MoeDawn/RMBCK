@@ -1,2 +1,119 @@
-/* RMBCK overlay placeholder (Task 12) */
-html, body { margin: 0; background: transparent; }
+/* ---------- 主题变量（与 app.css 保持一致；悬浮窗是独立页面，无法直接 import） ---------- */
+:root {
+  --bg: #12141c;
+  --bg2: #171a24;
+  --card: rgba(255,255,255,.045);
+  --cardHi: rgba(255,255,255,.075);
+  --text: #e8eaf3;
+  --textSub: #9aa3b8;
+  --line: rgba(255,255,255,.10);
+  --track: rgba(255,255,255,.12);
+  --sel: rgba(124,92,255,.25);
+  --accent: #22d3ee;
+  --accent2: #7c5cff;
+  --accent2Hover: #9a83ff;
+  --accent2Active: #6a4be0;
+  --grad: linear-gradient(90deg,#7c5cff,#22d3ee);
+  --ok: #34d399; --err: #f87171; --warn: #fbbf24;
+  --shadow: 0 18px 50px rgba(0,0,0,.55);
+  color-scheme: dark;
+}
+
+html[data-theme="day"] {
+  --bg: #fff0f5;
+  --bg2: #ffffff;
+  --card: rgba(255,255,255,.86);
+  --cardHi: rgba(255,255,255,.98);
+  --text: #4a4a68;
+  --textSub: #9a9aaf;
+  --line: #fad7e3;
+  --track: #ffd1e0;
+  --sel: #ffd9e8;
+  --accent: #a78bfa;
+  --accent2: #ff6fa5;
+  --accent2Hover: #ff85b3;
+  --accent2Active: #f05a94;
+  --grad: linear-gradient(90deg,#ff7aac,#ba94ff);
+  --ok: #4caf50; --err: #eb5a6e; --warn: #f0a028;
+  --shadow: 0 14px 40px rgba(226,140,175,.22);
+  color-scheme: light;
+}
+
+/* ---------- 透明画布：只绘制卡片/胶囊本身 ---------- */
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+body { font: 13px/1.6 "Microsoft YaHei UI", "Segoe UI", sans-serif; color: var(--text); }
+#root { height: 100%; }
+
+/* ---------- Toast ---------- */
+.card {
+  border-radius: 14px;
+  padding: 12px 18px;
+  border: 1px solid rgba(124,92,255,.55);
+  background: rgba(20,24,36,.90);
+  /* 外阴影会扩散到窗口四角，破坏“整窗透明”的像素检查；改用内阴影保留玻璃感 */
+  box-shadow: 0 0 0 1px rgba(34,211,238,.16) inset;
+  animation: slideIn .18s ease;
+}
+.card.ok { border-color: var(--ok); }
+.card.err { border-color: var(--err); }
+.card.info { border-color: var(--accent); }
+@keyframes slideIn { from { opacity: 0; transform: translateY(-8px); } }
+.big { color: var(--accent); font-weight: 600; }
+
+/* ---------- HUD ---------- */
+#root.hudRoot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 8px 12px;
+}
+.hud {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  background: rgba(18,20,28,.72);
+  border: 1px solid rgba(34,211,238,.45);
+  font-size: 12px;
+  white-space: nowrap;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse { 50% { box-shadow: 0 0 14px rgba(34,211,238,.45); } }
+
+/* ---------- 彩蛋 ---------- */
+.egg { padding: 14px 18px; }
+.egg .line {
+  white-space: pre;
+  font-size: 12px;
+  line-height: 1.55;
+  opacity: 0;
+  transform: translateY(2px);
+}
+.egg .line.in { opacity: 1; transform: none; transition: opacity .12s, transform .12s; }
+.egg .line.accent { color: #ff9ecb; }
+.egg .mark { margin-left: 6px; }
+.egg .ok { color: var(--ok); }
+.egg .err { color: var(--err); }
+.egg .warn { color: var(--warn); }
+.egg .cursor {
+  display: inline-block;
+  width: 7px;
+  height: 12px;
+  background: var(--accent2);
+  animation: blink .45s steps(1) infinite;
+  vertical-align: -2px;
+  margin-left: 2px;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---------- 日间补充 ---------- */
+html[data-theme="day"] body { color: #4a4a68; }
+html[data-theme="day"] .card { background: rgba(255,255,255,.95); border-color: rgba(255,111,165,.55); }
+html[data-theme="day"] .card.ok { border-color: var(--ok); }
+html[data-theme="day"] .card.err { border-color: var(--err); }
+html[data-theme="day"] .card.info { border-color: var(--accent2); }
+html[data-theme="day"] .big { color: #ff6fa5; }
+html[data-theme="day"] .hud { background: rgba(255,255,255,.86); border-color: rgba(255,111,165,.5); }
+html[data-theme="day"] .egg .line.accent { color: #ff6fa5; }
+html[data-theme="day"] .egg .cursor { background: #a78bfa; }

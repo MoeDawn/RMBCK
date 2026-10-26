@@ -27,7 +27,7 @@ rem 注意：exe 文件名里的版本号需与 src\Program.cs 的 AssemblyVersi
   src\Program.cs ^
   src\Core\Settings.cs src\Core\Keys.cs src\Core\Hooks.cs src\Core\Trigger.cs ^
   src\Core\Hotkey.cs src\Core\Autostart.cs src\Core\History.cs ^
-  src\App\WebAssets.cs src\App\Bridge.cs src\App\MainForm.cs
+  src\App\WebAssets.cs src\App\Bridge.cs src\App\MainForm.cs src\App\OverlayForm.cs
 if not %errorlevel%==0 (echo 编译失败 & exit /b 1)
 copy /y lib\*.dll . >nul
 echo 编译成功: RMBCK 2.0.0.exe

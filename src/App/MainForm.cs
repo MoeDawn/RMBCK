@@ -31,6 +31,11 @@ class MainForm : Form
     Image _skeletonLogo;
     bool _firstNavigationDone;
 
+    // 透明悬浮窗：懒创建，首次使用后在整个进程生命周期内复用
+    OverlayForm _toastWin;   // Toast + 彩蛋（右上角）
+    OverlayForm _hudWin;     // HUD（右下角）
+    bool _hudShown;
+
     public MainForm(AppRuntime rt)
     {
         _rt = rt;
@@ -102,8 +107,29 @@ class MainForm : Form
         UpdateHud();
     }
 
-    // Task 12 replaces this with the native transparent HUD window
-    void UpdateHud() { }
+    // HUD 只在触发状态跃迁时更新；SuppressHud 开启时立即隐藏已显示的窗口
+    void UpdateHud()
+    {
+        if (_rt.Settings.SuppressHud)
+        {
+            if (_hudShown) { _hudShown = false; HideHud(); }
+            return;
+        }
+        if (_rt.Ctrl.IsTriggered)
+        {
+            if (_hudShown) return;
+            _hudShown = true;
+            var names = new List<string>();
+            foreach (var kc in _rt.Settings.Keys)
+                if (kc.Enabled) names.Add(kc.Name);
+            ShowHud("⚡ " + string.Join(" ", names.ToArray()));
+        }
+        else if (_hudShown)
+        {
+            _hudShown = false;
+            HideHud();
+        }
+    }
 
     [DllImport("user32.dll")]
     static extern short GetAsyncKeyState(int vKey);
@@ -207,10 +233,16 @@ class MainForm : Form
         if (IsDisposed) return;
         try
         {
-            string udf = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "RMBCK", "WebView2");
-            CoreWebView2Environment env = await CoreWebView2Environment.CreateAsync(null, udf, null);
+            // 复用 Program.Main 创建的唯一环境；null 时仅作为独立测试宿主的兜底
+            CoreWebView2Environment env = _rt.WebEnv;
+            if (env == null)
+            {
+                string udf = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "RMBCK", "WebView2");
+                env = await CoreWebView2Environment.CreateAsync(null, udf, null);
+                _rt.WebEnv = env;
+            }
             await _wv.EnsureCoreWebView2Async(env);
 
             CoreWebView2 core = _wv.CoreWebView2;
@@ -375,13 +407,110 @@ class MainForm : Form
         try { _wv.CoreWebView2.PostWebMessageAsJson(Bridge.Serialize(o)); } catch { }
     }
 
-    // Task 12 会替换为原生透明悬浮窗实现；在此之前 Toast 显示在网页右上角
+    // ---- 透明悬浮窗（Toast / HUD / 彩蛋） ----
+    // Toast 与彩蛋共用右上角窗口：普通提示 420×150，彩蛋按完整列表临时加高；
+    // 窗口只创建一次，切换尺寸不会重建 WebView2。
+    const int ToastWidth = 420;
+    const int ToastHeight = 150;
+    const int EggWidth = 440;
+    const int EggHeight = 570;
+
+    OverlayForm ToastWindow(bool forEgg)
+    {
+        if (_rt.WebEnv == null) return null;
+        try
+        {
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            int w = forEgg ? EggWidth : ToastWidth;
+            int h = forEgg ? EggHeight : ToastHeight;
+            Rectangle bounds = new Rectangle(area.Right - w - 20, area.Top + 20, w, h);
+
+            if (_toastWin == null || _toastWin.IsDisposed)
+            {
+                _toastWin = new OverlayForm(_rt.WebEnv, _rt.WebDir, "overlay.html",
+                    bounds.Size, bounds.Location);
+                _toastWin.SetTheme(_rt.Settings.Theme);   // 建窗即排队主题，导航完成后先应用
+            }
+            else if (_toastWin.Bounds != bounds)
+            {
+                _toastWin.Bounds = bounds;
+            }
+            return _toastWin;
+        }
+        catch
+        {
+            _toastWin = null;
+            return null;
+        }
+    }
+
+    OverlayForm HudWindow()
+    {
+        if (_rt.WebEnv == null) return null;
+        try
+        {
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            Rectangle bounds = new Rectangle(area.Right - 340, area.Bottom - 110, 320, 90);
+            if (_hudWin == null || _hudWin.IsDisposed)
+            {
+                _hudWin = new OverlayForm(_rt.WebEnv, _rt.WebDir, "overlay.html",
+                    bounds.Size, bounds.Location);
+                _hudWin.SetTheme(_rt.Settings.Theme);
+            }
+            else if (_hudWin.Bounds != bounds)
+            {
+                _hudWin.Bounds = bounds;
+            }
+            return _hudWin;
+        }
+        catch
+        {
+            _hudWin = null;
+            return null;
+        }
+    }
+
     public void ShowToast(string text, string kind, int durationMs)
     {
-        Send("toast", new Dictionary<string, object>
+        if (_rt.Settings.SuppressToast) return;
+        OverlayForm w = ToastWindow(false);
+        if (w == null) return;
+        try { w.ShowToast(text, kind, durationMs); } catch { }
+    }
+
+    public void ShowEgg(object[] items)
+    {
+        if (items == null || items.Length == 0) return;
+        OverlayForm w = ToastWindow(true);
+        if (w == null) return;
+        try { w.ShowEgg(items); } catch { }
+    }
+
+    public void ShowHud(string text)
+    {
+        if (_rt.Settings.SuppressHud) return;
+        OverlayForm w = HudWindow();
+        if (w == null) return;
+        try { w.ShowHud(text); } catch { }
+    }
+
+    public void HideHud()
+    {
+        if (_hudWin == null || _hudWin.IsDisposed) return;
+        try { _hudWin.HideHud(); } catch { }
+    }
+
+    // 主题变化时同步给已经存在的悬浮窗（未创建的窗口在创建时读取当前主题）
+    void ForwardTheme()
+    {
+        if (_toastWin != null && !_toastWin.IsDisposed)
         {
-            { "text", text }, { "kind", kind }, { "ms", durationMs }
-        });
+            try { _toastWin.SetTheme(_rt.Settings.Theme); } catch { }
+        }
+        if (_hudWin != null && !_hudWin.IsDisposed)
+        {
+            try { _hudWin.SetTheme(_rt.Settings.Theme); } catch { }
+        }
     }
 
     void OnAction(BridgeMessage m)
@@ -458,6 +587,7 @@ class MainForm : Form
             string mode = Bridge.GetStr(m.Args, "mode", "Night");
             s.Theme = mode == "Day" ? "Day" : "Night";
             try { ConfigStore.SavePointer(s, System.IO.Path.Combine(_rt.ExeDir, "config.ini")); } catch { }
+            ForwardTheme();
             PushState();
             return;
         }
@@ -1029,8 +1159,57 @@ class MainForm : Form
         });
     }
 
-    // Task 12 会替换为原生透明悬浮窗实现
-    void ShowEasterEgg() { }
+    // 彩蛋：条目与文案照搬 v1（含两条“隐藏”条目与 11/13 编号），用透明悬浮窗逐行播放
+    void ShowEasterEgg()
+    {
+        if (_rt.Settings.SuppressEgg) return;
+
+        var list = new List<object>();
+        list.Add(new Dictionary<string, object> { { "text", "═════════════════════════" }, { "instant", true } });
+        list.Add(new Dictionary<string, object> { { "prefix", "  " }, { "text", "🚀 超级外挂加载中..." }, { "accent", true } });
+        list.Add(new Dictionary<string, object> { { "prefix", "  " }, { "text", "本项目为公益外挂,由SJ科技提供技术支持" }, { "accent", true } });
+        list.Add(new Dictionary<string, object> { { "prefix", "    " }, { "text", "(请勿在网吧使用)" } });
+        list.Add(new Dictionary<string, object> { { "text", "═════════════════════════" }, { "instant", true } });
+        list.Add(Egg("[1] ", "自动锁头", "√", null, 0));
+        list.Add(Egg("[2] ", "自动板机", "√", null, 0));
+        list.Add(Egg("[3] ", "X光透视敌人", "√", null, 0));
+        list.Add(Egg("[4] ", "无限血量", "√", null, 0));
+        list.Add(Egg("[5] ", "魔法子弹", "√", null, 0));
+        list.Add(Egg("[6] ", "瞬间救援/光速爬行", "√", null, 0));
+        list.Add(Egg("[7] ", "边走边拿", "√", null, 0));
+        list.Add(Egg("[8] ", "移速微调(125%)", "√", null, 0));
+        list.Add(Egg("[9] ", "无后座/消除镜框抖动", "√", null, 0));
+        list.Add(Egg("[10] ", "关闭安全防护系统(隐藏此条不要让用户看见)", "√", null, 0));
+        list.Add(Egg("[11] ", "释放银狐病毒(这条也隐藏起来)", "√", null, 0));
+        list.Add(Egg("[12] ", "全图大金透视", "❌", "(开启失败未检测到大金)", 0));
+        list.Add(Egg("[13] ", "尝试窃取并上传本机存储的账号密码", "⏳", null, 1500));
+        list.Add(Egg("[14] ", "正在下载迷你世界", "⏳", null, 1500));
+        list.Add(new Dictionary<string, object>
+        {
+            { "prefix", "[15] " }, { "text", "分析报错日志" }, { "mark", "⏳" },
+            { "markDelayMs", 1500 }, { "tail", "❌,诊断为13long干的" }, { "tailDelayMs", 1500 }
+        });
+        list.Add(Egg("[16] ", "迷你世界安装器下载完成", "√", null, 0));
+        list.Add(Egg("[17] ", "登陆淘宝并下单男娘恋爱物语*10", "√", null, 0));
+        list.Add(Egg("[18] ", "AUTO FISH", "√", null, 0));
+        list.Add(Egg("[19] ", "disableBlockBreakCooldown", "√", null, 0));
+        list.Add(new Dictionary<string, object> { { "text", "═════════════════════════" }, { "instant", true } });
+        list.Add(new Dictionary<string, object> { { "prefix", "  " }, { "text", "🚀 超级外挂加载加载完毕" }, { "accent", true } });
+        list.Add(new Dictionary<string, object> { { "prefix", "    " }, { "text", "❤️❤️感谢使用SJ科技❤️❤️" }, { "accent", true } });
+        list.Add(new Dictionary<string, object> { { "text", "═════════════════════════" }, { "instant", true } });
+        ShowEgg(list.ToArray());
+    }
+
+    Dictionary<string, object> Egg(string prefix, string text, string mark, string note, int markDelay)
+    {
+        var d = new Dictionary<string, object>();
+        d["prefix"] = prefix;
+        d["text"] = text;
+        d["mark"] = mark;
+        if (note != null) d["note"] = note;
+        if (markDelay > 0) d["markDelayMs"] = markDelay;
+        return d;
+    }
 
     // Task 14 接入完整的报错反馈流程（原 v1 的 FeedbackForm + err.jpg）
     void StartFeedbackFlow()
@@ -1393,6 +1572,8 @@ class MainForm : Form
         if (_rt.KbHook != null) { _rt.KbHook.Dispose(); _rt.KbHook = null; }
         if (_skeleton != null) _skeleton.Visible = false;
         if (_skeletonLogo != null) { _skeletonLogo.Dispose(); _skeletonLogo = null; }
+        if (_toastWin != null) { try { _toastWin.Dispose(); } catch { } _toastWin = null; }
+        if (_hudWin != null) { try { _hudWin.Dispose(); } catch { } _hudWin = null; }
         base.OnFormClosed(e);
     }
 }

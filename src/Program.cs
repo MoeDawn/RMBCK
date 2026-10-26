@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 
@@ -21,6 +22,8 @@ class AppRuntime
     public HistoryRing History;
     public string ExeDir;
     public string WebDir;
+    // 全进程唯一的 WebView2 环境：主窗口与所有悬浮窗共用，避免重复启动浏览器进程（约 2.9s）
+    public CoreWebView2Environment WebEnv;
 }
 
 static class Bootstrap
@@ -160,6 +163,22 @@ class Program
             catch (Exception ex)
             {
                 MessageBox.Show("无法解压界面资源：" + ex.Message, "右键长按联动器",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // 环境只创建一次：之后主窗口与 Toast/HUD 悬浮窗都用它创建控制器。
+            // 第二个控制器复用已启动的浏览器进程只需几十毫秒；重复建环境则要重新启动浏览器。
+            try
+            {
+                string udf = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "RMBCK", "WebView2");
+                rt.WebEnv = CoreWebView2Environment.CreateAsync(null, udf, null).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("无法初始化 WebView2 环境：" + ex.Message, "右键长按联动器",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
