@@ -95,6 +95,8 @@ class MainForm : Form
                 : (TargetForegroundActive() ? _rt.Settings.TargetProcess : "其他进程");
             _rt.History.Add(names.Count > 0 ? string.Join("+", names.ToArray()) : "-", proc,
                 _rt.Settings.RandomJitter ? "随机" : "标准", DateTime.Now);
+            // 仅在跃迁上推送（不是周期推送）：日志页打开时即时刷新，其他页面只缓存
+            Send("history", _rt.History.Snapshot());
         }
         _wasTriggered = now;
         UpdateHud();

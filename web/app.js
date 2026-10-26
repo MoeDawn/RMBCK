@@ -493,18 +493,19 @@
     var scrollTop = prevList ? prevList.scrollTop : 0;
 
     p.innerHTML = "";
+    var items = window.__history || [];
     var card = el("div", "card");
     card.appendChild(el("h3", null, "触发日志（仅本次运行）"));
     var row = el("div", "row");
     var exp = el("button", "btn", "导出 CSV");
     var clr = el("button", "btnGhost", "清空");
+    exp.disabled = !items.length;   // 空日志没有可导出的内容
     exp.onclick = function () { send("exportHistory", {}); };
     clr.onclick = function () { send("clearHistory", {}); };
     row.appendChild(exp); row.appendChild(clr);
     row.appendChild(el("span", "muted", "仅统计本次运行期间触发的记录，不写入磁盘"));
     card.appendChild(row);
 
-    var items = window.__history || [];
     var list = el("div", "histList");
     if (!items.length) list.appendChild(el("div", "muted empty", "暂无记录"));
     items.forEach(function (it) {

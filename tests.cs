@@ -507,6 +507,30 @@ class TestRunner
                 Assert(qt.IndexOf("\"line1\nline2.exe\"") >= 0, "含换行字段整体加引号");
             }
             finally { try { File.Delete(qcsv); } catch { } }
+
+            // 公式注入：以 = + - @ 开头的文本前置单引号（前导空格后也算），普通文本不变
+            var f = new HistoryRing();
+            f.Add("Q", "=cmd", "标准", new DateTime(2026, 1, 2, 3, 4, 5));
+            f.Add("Q", "+1", "标准", new DateTime(2026, 1, 2, 3, 4, 6));
+            f.Add("Q", "-2", "标准", new DateTime(2026, 1, 2, 3, 4, 7));
+            f.Add("Q", "@x", "标准", new DateTime(2026, 1, 2, 3, 4, 8));
+            f.Add("Q", "plain.exe", "标准", new DateTime(2026, 1, 2, 3, 4, 9));
+            f.Add("Q", " =pad.exe", "标准", new DateTime(2026, 1, 2, 3, 4, 10));
+            f.Add("Q", "=a,b", "标准", new DateTime(2026, 1, 2, 3, 4, 11));
+            string fcsv = Path.Combine(Path.GetTempPath(), "rckl_hist_f_" + Guid.NewGuid().ToString("N") + ".csv");
+            try
+            {
+                Assert(f.ExportCsv(fcsv) == 7, "公式注入样本导出 7 行");
+                string ft = File.ReadAllText(fcsv);
+                Assert(ft.IndexOf("'=cmd") >= 0, "= 开头加单引号");
+                Assert(ft.IndexOf("'+1") >= 0, "+ 开头加单引号");
+                Assert(ft.IndexOf("'-2") >= 0, "- 开头加单引号");
+                Assert(ft.IndexOf("'@x") >= 0, "@ 开头加单引号");
+                Assert(ft.IndexOf("plain.exe") >= 0 && ft.IndexOf("'plain.exe") < 0, "普通文本不加单引号");
+                Assert(ft.IndexOf("' =pad.exe") >= 0, "前导空格后的公式字符同样加单引号");
+                Assert(ft.IndexOf("\"'=a,b\"") >= 0, "加前缀后仍按逗号加引号");
+            }
+            finally { try { File.Delete(fcsv); } catch { } }
         }
         finally { try { File.Delete(csv); } catch { } }
     }

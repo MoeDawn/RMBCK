@@ -217,6 +217,7 @@ input[type=text], input[type=number], select {
   min-width: 0; }
 .histMode { color: var(--textSub); text-align: right; }
 .histList .empty { padding: 14px 8px; }
+#page-history .btn:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ---------- 设置页 ---------- */
 .modBox { display: inline-flex; align-items: center; gap: 8px; margin-right: 16px; }

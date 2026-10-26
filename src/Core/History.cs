@@ -63,6 +63,11 @@ class HistoryRing
     static string Csv(string v)
     {
         if (v == null) return "";
+        // 防 Excel 公式注入：以公式起始字符开头的文本前置单引号
+        int i = 0;
+        while (i < v.Length && (v[i] == ' ' || v[i] == '\t')) i++;
+        if (i < v.Length && (v[i] == '=' || v[i] == '+' || v[i] == '-' || v[i] == '@'))
+            v = "'" + v;
         if (v.IndexOf(',') >= 0 || v.IndexOf('"') >= 0 ||
             v.IndexOf('\n') >= 0 || v.IndexOf('\r') >= 0)
             return "\"" + v.Replace("\"", "\"\"") + "\"";
