@@ -20,6 +20,7 @@ class TestRunner
         TestTriggerController();
         TestTriggerDelayAndMods();
         TestWebAssets();
+        TestBridge();
         if (_fail > 0) { Console.WriteLine(_fail + " 个测试失败"); return 1; }
         Console.WriteLine("全部通过"); return 0;
     }
@@ -381,6 +382,28 @@ class TestRunner
         Assert(WebAssets.Map["RMBCK.web.assets.icon.png"] == "assets/icon.png", "assets 子目录映射正确");
         string txt = WebAssets.ReadText("index.html");
         Assert(txt != null && txt.IndexOf("<html") >= 0, "ReadText 读取 index.html");
+    }
+
+    static void TestBridge()
+    {
+        Section("Bridge 消息解析");
+        BridgeMessage m = Bridge.Parse("{\"action\":\"setSetting\",\"key\":\"longPressMs\",\"value\":450}");
+        Assert(m != null && m.Action == "setSetting", "解析 action");
+        Assert(Bridge.GetStr(m.Args, "key", "") == "longPressMs", "解析字符串参数");
+        Assert(Bridge.GetInt(m.Args, "value", -1) == 450, "解析整数参数");
+
+        BridgeMessage m2 = Bridge.Parse("{\"action\":\"setTheme\",\"mode\":\"Day\"}");
+        Assert(m2 != null && Bridge.GetStr(m2.Args, "mode", "") == "Day", "解析 setTheme");
+
+        Assert(Bridge.Parse("not json") == null, "非法 JSON 返回 null 不抛");
+        Assert(Bridge.Parse("") == null, "空串返回 null");
+        Assert(Bridge.Parse("{\"x\":1}") == null, "缺 action 返回 null");
+
+        BridgeMessage m3 = Bridge.Parse("{\"action\":\"selectProcess\",\"name\":\"a.exe\"}");
+        Assert(Bridge.GetStr(m3.Args, "name", "") == "a.exe", "解析进程名");
+
+        string json = Bridge.Serialize(new Dictionary<string, object> { { "ok", true }, { "n", 3 } });
+        Assert(json.IndexOf("\"ok\":true") >= 0 && json.IndexOf("\"n\":3") >= 0, "序列化对象");
     }
 }
 

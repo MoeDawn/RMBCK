@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -80,6 +81,16 @@ class MainForm : Form
             core.Settings.IsStatusBarEnabled = false;
             core.NewWindowRequested += delegate(object s, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; };
             core.SetVirtualHostNameToFolderMapping("rmbck.local", _rt.WebDir, CoreWebView2HostResourceAccessKind.Allow);
+            core.WebMessageReceived += delegate(object s, CoreWebView2WebMessageReceivedEventArgs e)
+            {
+                string json = null;
+                try { json = e.WebMessageAsJson; } catch { }
+                if (json == null) { try { json = e.TryGetWebMessageAsString(); } catch { } }
+                BridgeMessage m = Bridge.Parse(json);
+                if (m == null) return;
+                try { OnAction(m); }
+                catch (Exception ex) { ShowToast("操作失败：" + ex.Message, "err", 2000); }
+            };
             core.NavigationCompleted += delegate { _ready = true; PushState(); };
             core.Navigate("https://rmbck.local/index.html");
         }
@@ -91,7 +102,165 @@ class MainForm : Form
         }
     }
 
-    public void PushState() { }
+    public void PushState()
+    {
+        if (!_ready) return;
+        var s = _rt.Settings;
+        var d = new Dictionary<string, object>();
+        d["enabled"] = s.Enabled;
+        d["longPressMs"] = s.LongPressMs;
+        d["randomJitter"] = s.RandomJitter;
+        d["profile"] = s.Profile;
+        d["profiles"] = ConfigStore.ListProfiles(ProfileDir());
+        d["targetProcess"] = s.TargetProcess;
+        d["configFolder"] = ProfileDir();
+        d["blockCtrl"] = s.BlockCtrl;
+        d["blockShift"] = s.BlockShift;
+        d["blockAlt"] = s.BlockAlt;
+        d["blockWin"] = s.BlockWin;
+        d["suppressToast"] = s.SuppressToast;
+        d["suppressEgg"] = s.SuppressEgg;
+        d["suppressHud"] = s.SuppressHud;
+        d["suppressHotkeyToast"] = s.SuppressHotkeyToast;
+        d["headerAnim"] = s.HeaderAnim;
+        d["theme"] = s.Theme;
+        d["hotkey"] = HotkeyManager.Describe(s.HotkeyMods, s.HotkeyVk);
+        d["autostart"] = Autostart.IsEnabled();
+        d["eggBoost"] = s.EggBoost;
+        var arr = new List<object>();
+        for (int i = 0; i < s.Keys.Count; i++)
+        {
+            var kc = s.Keys[i];
+            var o = new Dictionary<string, object>();
+            o["index"] = i;
+            o["enabled"] = kc.Enabled;
+            o["name"] = kc.Name;
+            o["mode"] = kc.Mode.ToString();
+            o["mods"] = kc.Mods;
+            o["repeat"] = kc.RepeatIntervalMs;
+            o["delay"] = kc.DelayMs;
+            arr.Add(o);
+        }
+        d["keys"] = arr.ToArray();
+        d["conflicts"] = FindConflicts();
+        d["keyNames"] = KeyNames.CommonKeys;
+        Send("state", d);
+    }
+
+    public string ProfileDir()
+    {
+        return string.IsNullOrEmpty(_rt.Settings.ConfigFolder) ? _rt.ExeDir : _rt.Settings.ConfigFolder;
+    }
+
+    List<object> FindConflicts()
+    {
+        var seen = new Dictionary<string, int>();
+        var res = new List<object>();
+        for (int i = 0; i < _rt.Settings.Keys.Count; i++)
+        {
+            var kc = _rt.Settings.Keys[i];
+            if (!kc.Enabled || kc.Name.Length == 0) continue;
+            string key = kc.Mods + ":" + kc.Vk;
+            int first;
+            if (seen.TryGetValue(key, out first)) res.Add(new Dictionary<string, object> { { "a", first }, { "b", i } });
+            else seen[key] = i;
+        }
+        return res;
+    }
+
+    public void Send(string type, object data)
+    {
+        if (!_ready) return;
+        var o = new Dictionary<string, object>();
+        o["type"] = type;
+        o["data"] = data;
+        try { _wv.CoreWebView2.PostWebMessageAsJson(Bridge.Serialize(o)); } catch { }
+    }
+
+    // Task 12 会替换为原生透明悬浮窗实现；在此之前 Toast 显示在网页右上角
+    public void ShowToast(string text, string kind, int durationMs)
+    {
+        Send("toast", new Dictionary<string, object>
+        {
+            { "text", text }, { "kind", kind }, { "ms", durationMs }
+        });
+    }
+
+    void OnAction(BridgeMessage m)
+    {
+        var s = _rt.Settings;
+        string a = m.Action;
+
+        if (a == "ready") { PushState(); return; }
+        if (a == "dragStart") { BeginDrag(); return; }
+        if (a == "minimizeToTray" || a == "closeRequest")
+        {
+            // Task 13 实现真正的托盘/关闭逻辑
+            ShowToast("该功能将在后续版本启用", "info", 1200);
+            return;
+        }
+
+        // Task 5 仅回显内存状态；Task 7 接管持久化与控制器联动
+        if (a == "toggleEnabled")
+        {
+            s.Enabled = Bridge.GetBool(m.Args, "enabled", !s.Enabled);
+            PushState();
+            return;
+        }
+        if (a == "setSetting")
+        {
+            ApplySetting(Bridge.GetStr(m.Args, "key", ""), m.Args);
+            PushState();
+            return;
+        }
+        if (a == "setProfile")
+        {
+            string name = Bridge.GetStr(m.Args, "name", "");
+            if (name.Length > 0) s.Profile = name;
+            PushState();
+            return;
+        }
+        if (a == "newProfile")
+        {
+            string name = Bridge.GetStr(m.Args, "name", "").Trim();
+            if (name.Length > 0) s.Profile = name;
+            PushState();
+            return;
+        }
+        if (a == "deleteProfile")
+        {
+            string name = Bridge.GetStr(m.Args, "name", "");
+            if (name.Length > 0 && name == s.Profile) s.Profile = "默认";
+            PushState();
+            return;
+        }
+        if (a == "startTest" || a == "stopTest")
+        {
+            PushState();
+            return;
+        }
+    }
+
+    void ApplySetting(string key, Dictionary<string, object> args)
+    {
+        var s = _rt.Settings;
+        if (key == "longPressMs")
+        {
+            int v = Math.Max(100, Math.Min(2000, Bridge.GetInt(args, "value", s.LongPressMs)));
+            s.LongPressMs = v;
+            _rt.Ctrl.SetThreshold(v);
+        }
+        else if (key == "randomJitter") s.RandomJitter = Bridge.GetBool(args, "value", s.RandomJitter);
+        else if (key == "blockCtrl") s.BlockCtrl = Bridge.GetBool(args, "value", s.BlockCtrl);
+        else if (key == "blockShift") s.BlockShift = Bridge.GetBool(args, "value", s.BlockShift);
+        else if (key == "blockAlt") s.BlockAlt = Bridge.GetBool(args, "value", s.BlockAlt);
+        else if (key == "blockWin") s.BlockWin = Bridge.GetBool(args, "value", s.BlockWin);
+        else if (key == "suppressToast") s.SuppressToast = Bridge.GetBool(args, "value", s.SuppressToast);
+        else if (key == "suppressEgg") s.SuppressEgg = Bridge.GetBool(args, "value", s.SuppressEgg);
+        else if (key == "suppressHud") s.SuppressHud = Bridge.GetBool(args, "value", s.SuppressHud);
+        else if (key == "suppressHotkeyToast") s.SuppressHotkeyToast = Bridge.GetBool(args, "value", s.SuppressHotkeyToast);
+        else if (key == "headerAnim") s.HeaderAnim = Bridge.GetBool(args, "value", s.HeaderAnim);
+    }
 
     // ---- 无边框：缩放 + 拖动 ----
     const int WM_NCHITTEST = 0x0084;
