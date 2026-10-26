@@ -39,6 +39,8 @@
     for (var j = 0; j < pages.length; j++)
       pages[j].classList.toggle("active", pages[j].id === "page-" + name);
     render();
+    // 日志只存在内存里：每次进入页面主动拉一次，避免显示上次打开时的旧列表
+    if (name === "history") send("showHistory", {});
   }
   window.__showPage = showPage;
 
@@ -480,6 +482,48 @@
       search.focus();
       try { search.setSelectionRange(caret, caret); } catch (e) { }
     }
+  };
+
+  // ---------- 日志页 ----------
+  // 状态推送会重绘整页：重建前后保存/恢复列表滚动位置，避免用户翻看旧记录时被拉回顶部
+  window.render_history = function (s) {
+    var p = document.getElementById("page-history");
+    if (!p) return;
+    var prevList = p.querySelector(".histList");
+    var scrollTop = prevList ? prevList.scrollTop : 0;
+
+    p.innerHTML = "";
+    var card = el("div", "card");
+    card.appendChild(el("h3", null, "触发日志（仅本次运行）"));
+    var row = el("div", "row");
+    var exp = el("button", "btn", "导出 CSV");
+    var clr = el("button", "btnGhost", "清空");
+    exp.onclick = function () { send("exportHistory", {}); };
+    clr.onclick = function () { send("clearHistory", {}); };
+    row.appendChild(exp); row.appendChild(clr);
+    row.appendChild(el("span", "muted", "仅统计本次运行期间触发的记录，不写入磁盘"));
+    card.appendChild(row);
+
+    var items = window.__history || [];
+    var list = el("div", "histList");
+    if (!items.length) list.appendChild(el("div", "muted empty", "暂无记录"));
+    items.forEach(function (it) {
+      var r = el("div", "histRow");
+      var time = el("span", "histTime", it.time);
+      time.title = (it.date || "") + " " + (it.time || "");
+      var keys = el("span", "histKeys", it.keys);
+      keys.title = it.keys || "";
+      var proc = el("span", "muted histProc", it.proc || "—");
+      proc.title = it.proc || "";
+      r.appendChild(time);
+      r.appendChild(keys);
+      r.appendChild(proc);
+      r.appendChild(el("span", "histMode", it.mode));
+      list.appendChild(r);
+    });
+    card.appendChild(list);
+    p.appendChild(card);
+    list.scrollTop = scrollTop;
   };
 
   // ---------- 设置页 ----------

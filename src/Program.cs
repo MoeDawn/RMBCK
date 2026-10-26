@@ -18,6 +18,7 @@ class AppRuntime
     public TriggerController Ctrl;
     public MouseHook Hook;
     public KeyboardHook KbHook;
+    public HistoryRing History;
     public string ExeDir;
     public string WebDir;
 }
@@ -148,6 +149,7 @@ class Program
         rt.Hook = hook;
         rt.Ctrl = new TriggerController(new SendInputKeySender(), settings.Keys, settings.LongPressMs, settings.Enabled);
         rt.Ctrl.RandomJitter = settings.RandomJitter;
+        rt.History = new HistoryRing();
 
         try
         {

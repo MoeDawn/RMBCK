@@ -202,6 +202,22 @@ input[type=text], input[type=number], select {
   outline: 2px solid var(--sel); outline-offset: 1px; border-color: var(--accent2);
 }
 
+/* ---------- 日志页 ---------- */
+.histList { margin-top: 10px; max-height: 420px; overflow-y: auto; }
+.histList::-webkit-scrollbar { width: 8px; }
+.histList::-webkit-scrollbar-thumb { background: var(--track); border-radius: 4px; }
+.histRow { display: grid; grid-template-columns: 76px 140px 1fr 90px; gap: 10px;
+  align-items: baseline; padding: 6px 8px; border-bottom: 1px solid var(--line);
+  font-size: 12px; }
+.histRow:last-child { border-bottom: 0; }
+.histTime { color: var(--textSub); font-variant-numeric: tabular-nums; }
+.histKeys { color: var(--accent); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.histProc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; }
+.histMode { color: var(--textSub); text-align: right; }
+.histList .empty { padding: 14px 8px; }
+
 /* ---------- 设置页 ---------- */
 .modBox { display: inline-flex; align-items: center; gap: 8px; margin-right: 16px; }
 .hotkeyBtn { min-width: 140px; text-align: center; padding: 7px 12px; border-radius: 8px;

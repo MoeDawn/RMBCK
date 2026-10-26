@@ -18,7 +18,7 @@ if not exist "%CSC%" set CSC=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe
   /resource:web\assets\err.jpg,RMBCK.web.assets.err.jpg ^
   /resource:web\assets\window.ico,RMBCK.web.assets.window.ico ^
   src\Core\Settings.cs src\Core\Keys.cs src\Core\Hooks.cs src\Core\Trigger.cs ^
-  src\Core\Hotkey.cs src\Core\Autostart.cs ^
+  src\Core\Hotkey.cs src\Core\Autostart.cs src\Core\History.cs ^
   src\App\WebAssets.cs src\App\Bridge.cs tests.cs
 if not %errorlevel%==0 exit /b 1
 .\tests.exe

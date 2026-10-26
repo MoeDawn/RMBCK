@@ -21,6 +21,7 @@ class TestRunner
         TestTriggerDelayAndMods();
         TestWebAssets();
         TestBridge();
+        TestHistory();
         TestHotkeyDescribe();
         if (_fail > 0) { Console.WriteLine(_fail + " 个测试失败"); return 1; }
         Console.WriteLine("全部通过"); return 0;
@@ -455,6 +456,59 @@ class TestRunner
         Assert(!Bridge.GetBool(bools, "zero", true), "GetBool 解析数字 0");
         Assert(Bridge.GetBool(bools, "missing", true), "GetBool 缺失键回退 true");
         Assert(!Bridge.GetBool(bools, "missing", false), "GetBool 缺失键回退 false");
+    }
+
+    static void TestHistory()
+    {
+        Section("HistoryRing 环形缓冲与导出");
+        var h = new HistoryRing();
+        for (int i = 0; i < 5; i++)
+            h.Add("Q", "a.exe", "保持", new DateTime(2026, 10, 26, 14, 32, i));
+        var snap = h.Snapshot();
+        Assert(snap.Count == 5, "加入 5 条");
+        Assert((string)snap[0]["time"] == "14:32:04", "快照最新在前");
+        Assert((string)snap[4]["time"] == "14:32:00", "快照最旧在末尾");
+        Assert((string)snap[0]["date"] == "10-26", "快照含 MM-dd 日期");
+        Assert((string)snap[0]["keys"] == "Q" && (string)snap[0]["proc"] == "a.exe" &&
+            (string)snap[0]["mode"] == "保持", "快照字段 keys/proc/mode");
+
+        h.Clear();
+        Assert(h.Snapshot().Count == 0, "清空后 0 条");
+
+        for (int i = 0; i < 1100; i++) h.Add("K" + i, "a.exe", "保持", DateTime.Now);
+        Assert(h.Snapshot().Count == 1000, "超过 1000 条只保留最近 1000");
+        var trimmed = h.Snapshot();
+        Assert((string)trimmed[0]["keys"] == "K1099", "环满后首条是最新记录");
+        Assert((string)trimmed[999]["keys"] == "K100", "最旧的 100 条被丢弃");
+
+        string csv = Path.Combine(Path.GetTempPath(), "rckl_hist_" + Guid.NewGuid().ToString("N") + ".csv");
+        try
+        {
+            Assert(h.ExportCsv(csv) == 1000, "导出 1000 行");
+            Assert(File.Exists(csv), "CSV 文件生成");
+            byte[] bytes = File.ReadAllBytes(csv);
+            Assert(bytes.Length > 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF,
+                "CSV 以 UTF-8 BOM (EF BB BF) 开头");
+            string text = File.ReadAllText(csv);
+            Assert(text.IndexOf("时间,键位,进程,模式") >= 0, "CSV 含表头");
+
+            // RFC 4180：逗号、双引号、换行都必须加引号（双引号双写转义）
+            var q = new HistoryRing();
+            q.Add("Ctrl,Q", "a,b.exe", "标准", new DateTime(2026, 1, 2, 3, 4, 5));
+            q.Add("W", "say \"hi\".exe", "随机", new DateTime(2026, 1, 2, 3, 4, 6));
+            q.Add("E", "line1\nline2.exe", "标准", new DateTime(2026, 1, 2, 3, 4, 7));
+            string qcsv = Path.Combine(Path.GetTempPath(), "rckl_hist_q_" + Guid.NewGuid().ToString("N") + ".csv");
+            try
+            {
+                Assert(q.ExportCsv(qcsv) == 3, "特殊字符导出 3 行");
+                string qt = File.ReadAllText(qcsv);
+                Assert(qt.IndexOf("\"Ctrl,Q\"") >= 0, "含逗号字段加引号");
+                Assert(qt.IndexOf("\"say \"\"hi\"\".exe\"") >= 0, "含双引号字段双写转义");
+                Assert(qt.IndexOf("\"line1\nline2.exe\"") >= 0, "含换行字段整体加引号");
+            }
+            finally { try { File.Delete(qcsv); } catch { } }
+        }
+        finally { try { File.Delete(csv); } catch { } }
     }
 
     static void TestHotkeyDescribe()

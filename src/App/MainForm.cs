@@ -79,11 +79,24 @@ class MainForm : Form
 
     Timer _tick;
     Timer _gateTimer;
+    bool _wasTriggered;
 
-    // Task 7 阶段：仅轮询触发；Task 11 扩展为写入触发日志
+    // 每次 10ms 轮询触发状态；只在 false -> true 的跃迁上写一条日志（不在每 tick 分配）
     void OnTickHandler()
     {
         _rt.Ctrl.OnTick(Environment.TickCount);
+        bool now = _rt.Ctrl.IsTriggered;
+        if (now && !_wasTriggered)
+        {
+            var names = new List<string>();
+            foreach (var kc in _rt.Settings.Keys)
+                if (kc.Enabled) names.Add(kc.Name);
+            string proc = string.IsNullOrEmpty(_rt.Settings.TargetProcess) ? ""
+                : (TargetForegroundActive() ? _rt.Settings.TargetProcess : "其他进程");
+            _rt.History.Add(names.Count > 0 ? string.Join("+", names.ToArray()) : "-", proc,
+                _rt.Settings.RandomJitter ? "随机" : "标准", DateTime.Now);
+        }
+        _wasTriggered = now;
         UpdateHud();
     }
 
@@ -598,6 +611,38 @@ class MainForm : Form
             SaveSettings();
             ApplyLinkageGate();
             PushState();
+            return;
+        }
+
+        // ---- 日志页动作（日志仅本次运行保留，不写磁盘） ----
+        if (a == "showHistory") { Send("history", _rt.History.Snapshot()); return; }
+        if (a == "clearHistory")
+        {
+            _rt.History.Clear();
+            Send("history", _rt.History.Snapshot());   // 立即把空列表推给页面
+            return;
+        }
+        if (a == "exportHistory")
+        {
+            using (var dlg = new SaveFileDialog())
+            {
+                dlg.Title = "导出触发日志";
+                dlg.Filter = "CSV 文件|*.csv";
+                dlg.FileName = "RMBCK日志_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".csv";
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    // 文件被占用/无权限时必须提示而不是抛异常
+                    try
+                    {
+                        int n = _rt.History.ExportCsv(dlg.FileName);
+                        ShowToast("已导出 " + n + " 条记录", "ok", 1600);
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowToast("导出失败：" + ex.Message, "err", 2400);
+                    }
+                }
+            }
             return;
         }
     }
