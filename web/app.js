@@ -3,6 +3,7 @@
   var wv = window.chrome && window.chrome.webview;
   var state = null;
   var page = "overview";
+  window.__autoBusy = false;   // 开机自启切换进行中（设置页禁用开关并忽略连击）
 
   function send(action, args) {
     if (!wv) return;
@@ -481,6 +482,148 @@
     }
   };
 
+  // ---------- 设置页 ----------
+  function hotkeyCapturing() {
+    var c = window.__capturing;
+    return !!(c && c.active && c.target === "hotkey");
+  }
+
+  function settingSwitch(key, on, label) {
+    var box = el("label", "modBox");
+    box.appendChild(window.__switch(on, function (v) {
+      send("setSetting", { key: key, value: v });
+    }));
+    box.appendChild(el("span", null, label));
+    return box;
+  }
+
+  window.render_settings = function (s) {
+    var p = document.getElementById("page-settings");
+    if (!p) return;
+    p.innerHTML = "";
+
+    var busy = !!window.__autoBusy;
+
+    // 热键与启动
+    var c1 = el("div", "card");
+    c1.appendChild(el("h3", null, "热键与启动"));
+    var r1 = el("div", "row");
+    r1.appendChild(el("span", "muted", "全局热键"));
+    var capturing = hotkeyCapturing() || !!window.__captureHotkey;
+    var hk = el("button", "hotkeyBtn" + (capturing ? " capturing" : ""),
+      capturing ? "请按下组合键…" : (s.hotkey || "未设置"));
+    hk.type = "button";
+    hk.title = capturing ? "按 Esc 取消" : "点击后按下组合键（须包含 Ctrl/Shift/Alt/Win）";
+    hk.onclick = function () {
+      if (capturing) {
+        window.__captureHotkey = false;
+        send("cancelCapture", {});
+        render();
+        return;
+      }
+      window.__captureHotkey = true;
+      send("captureKey", { target: "hotkey" });
+      render();
+      // 后端可能拒绝开始捕获（如键盘钩子不可用）：超时后恢复按钮，避免一直停留在等待态
+      setTimeout(function () {
+        if (window.__captureHotkey && !hotkeyCapturing()) {
+          window.__captureHotkey = false;
+          if (page === "settings") render();
+        }
+      }, 800);
+    };
+    r1.appendChild(hk);
+    r1.appendChild(el("span", "spacer"));
+    r1.appendChild(el("span", "muted", "开机自启动"));
+    var auto = window.__switch(s.autostart, function (v) {
+      if (window.__autoBusy) return;
+      window.__autoBusy = true;
+      render();
+      send("setAutostart", { on: v });
+    });
+    auto.type = "button";
+    if (busy) {
+      auto.disabled = true;
+      auto.classList.add("busy");
+      auto.title = "正在处理…";
+    }
+    r1.appendChild(auto);
+    if (busy) r1.appendChild(el("span", "muted", "处理中…"));
+    c1.appendChild(r1);
+    c1.appendChild(el("div", "muted",
+      "开机自启会创建一个名为 RMBCK 的计划任务（需要管理员权限创建，登录时以管理员权限启动，不弹 UAC）。"));
+    p.appendChild(c1);
+
+    // 修饰键屏蔽
+    var c2 = el("div", "card");
+    c2.appendChild(el("h3", null, "修饰键屏蔽"));
+    c2.appendChild(el("div", "muted",
+      "开启 = 屏蔽：按住该修饰键再长按右键不会触发联动；关闭 = 放行：对应组合键正常触发。"));
+    var r2 = el("div", "row");
+    r2.appendChild(settingSwitch("blockCtrl", s.blockCtrl, "Ctrl"));
+    r2.appendChild(settingSwitch("blockShift", s.blockShift, "Shift"));
+    r2.appendChild(settingSwitch("blockAlt", s.blockAlt, "Alt"));
+    r2.appendChild(settingSwitch("blockWin", s.blockWin, "Win"));
+    c2.appendChild(r2);
+    p.appendChild(c2);
+
+    // 弹窗与外观
+    var c3 = el("div", "card");
+    c3.appendChild(el("h3", null, "弹窗与外观"));
+    var r3 = el("div", "row");
+    r3.appendChild(settingSwitch("suppressToast", s.suppressToast, "进程切换提示"));
+    r3.appendChild(settingSwitch("suppressEgg", s.suppressEgg, "彩蛋"));
+    r3.appendChild(settingSwitch("suppressHud", s.suppressHud, "HUD 悬浮窗"));
+    r3.appendChild(settingSwitch("suppressHotkeyToast", s.suppressHotkeyToast, "热键状态提示"));
+    r3.appendChild(settingSwitch("headerAnim", s.headerAnim, "动态图标"));
+    c3.appendChild(r3);
+    var r3b = el("div", "row");
+    r3b.appendChild(el("span", "muted", "主题"));
+    var themeBtn = el("button", "btn", s.theme === "Night" ? "夜间（深色）" : "日间（樱花）");
+    themeBtn.type = "button";
+    themeBtn.onclick = function () {
+      var next = s.theme === "Night" ? "Day" : "Night";
+      applyTheme(next);           // 即时反馈；持久化由后端写指针文件
+      if (state) state.theme = next;
+      send("setTheme", { mode: next });
+    };
+    r3b.appendChild(themeBtn);
+    c3.appendChild(r3b);
+    p.appendChild(c3);
+
+    // 配置与反馈
+    var c4 = el("div", "card");
+    c4.appendChild(el("h3", null, "配置与反馈"));
+    var r4 = el("div", "row");
+    r4.appendChild(el("span", "muted", "配置文件位置"));
+    var folder = el("input");
+    folder.type = "text";
+    folder.readOnly = true;
+    folder.value = s.configFolder || "";
+    folder.title = s.configFolder || "";
+    folder.style.flex = "1";
+    r4.appendChild(folder);
+    var browse = el("button", "btn", "浏览…");
+    browse.type = "button";
+    browse.onclick = function () { send("chooseFolder", { which: "config" }); };
+    r4.appendChild(browse);
+    c4.appendChild(r4);
+    var r5 = el("div", "row");
+    var fb = el("button", "btnGhost", "报错反馈");
+    fb.type = "button";
+    fb.onclick = function () { send("submitFeedback", {}); };
+    var home = el("button", "btnGhost", "作者主页");
+    home.type = "button";
+    home.onclick = function () { send("openHomepage", {}); };
+    r5.appendChild(fb); r5.appendChild(home);
+    c4.appendChild(r5);
+    c4.appendChild(el("div", "muted footNote",
+      "If there are any problems with this project, you don't have to go to the author."));
+    c4.appendChild(el("div", "muted footNote",
+      "使用本软件自动视为放弃自身一切权益，一切解释权归作者所有，点击访问作者个人主页"));
+    p.appendChild(c4);
+  };
+
   function promptProfileName() {
     var w = $("modalWrap");
     w.innerHTML = "";
@@ -576,6 +719,7 @@
       if (msg.type === "state") {
         state = data;
         window.__state = state;
+        window.__autoBusy = !!(data && data.autostartBusy);
         render();
       }
       else if (msg.type === "toast") { toast(data && data.text, data && data.kind, data && data.ms); }

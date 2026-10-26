@@ -201,3 +201,17 @@ input[type=text], input[type=number], select {
 #page-process input[type=text]:focus-visible {
   outline: 2px solid var(--sel); outline-offset: 1px; border-color: var(--accent2);
 }
+
+/* ---------- 设置页 ---------- */
+.modBox { display: inline-flex; align-items: center; gap: 8px; margin-right: 16px; }
+.hotkeyBtn { min-width: 140px; text-align: center; padding: 7px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--cardHi); color: var(--text); font-size: 12px; }
+.hotkeyBtn:hover { border-color: var(--accent); }
+.hotkeyBtn.capturing { color: var(--accent); }
+.footNote { font-size: 11px; text-align: right; margin-top: 4px; }
+.sw.busy, .sw:disabled { opacity: .55; cursor: progress; }
+#page-settings .card .row + .row { margin-top: 10px; }
+#page-settings input[type=text] { min-width: 0; }
+#page-settings input[type=text]:focus-visible {
+  outline: 2px solid var(--sel); outline-offset: 1px; border-color: var(--accent2);
+}

@@ -21,6 +21,7 @@ class TestRunner
         TestTriggerDelayAndMods();
         TestWebAssets();
         TestBridge();
+        TestHotkeyDescribe();
         if (_fail > 0) { Console.WriteLine(_fail + " 个测试失败"); return 1; }
         Console.WriteLine("全部通过"); return 0;
     }
@@ -454,6 +455,19 @@ class TestRunner
         Assert(!Bridge.GetBool(bools, "zero", true), "GetBool 解析数字 0");
         Assert(Bridge.GetBool(bools, "missing", true), "GetBool 缺失键回退 true");
         Assert(!Bridge.GetBool(bools, "missing", false), "GetBool 缺失键回退 false");
+    }
+
+    static void TestHotkeyDescribe()
+    {
+        Section("HotkeyManager 描述与校验");
+        Assert(HotkeyManager.Describe(0x0002, 0x7B) == "Ctrl+F12", "Ctrl+F12 描述");
+        Assert(HotkeyManager.Describe(0x0006, 0x51) == "Ctrl+Shift+Q", "Ctrl+Shift+Q 描述");
+        Assert(HotkeyManager.Describe(0x000A, 0x20) == "Ctrl+Win+Space", "Ctrl+Win+Space 描述");
+        Assert(!HotkeyManager.IsValid(0, 0x51), "无修饰键无效");
+        Assert(!HotkeyManager.IsValid(0x0002, 0x11), "修饰键作为主键无效");
+        Assert(!HotkeyManager.IsValid(0x0002, 0xA2), "左右修饰键作为主键无效");
+        Assert(HotkeyManager.IsValid(0x0002, 0x7B), "Ctrl+F12 有效");
+        Assert(HotkeyManager.IsValid(0x0006, 0x51), "Ctrl+Shift+Q 有效");
     }
 }
 

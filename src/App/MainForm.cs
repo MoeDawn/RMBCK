@@ -16,6 +16,13 @@ class MainForm : Form
     bool _pageReady;
     bool _autostartCached;
     volatile bool _autostartRefreshing;
+    bool _autostartBusy;        // schtasks 切换进行中：忽略连击，前端显示忙碌
+    int _autostartGen;          // 作废与切换并发的查询结果
+    HotkeyManager _hotkey;
+    bool _hotkeyFailed;
+    const int HotkeyId = 1;
+    const int WM_HOTKEY = 0x0312;
+    const string HomepageUrl = "https://www.bilibili.com/video/BV1GJ411x7h7";
     bool _kbInstallFailed;
     bool _kbFailureShown;
 
@@ -263,6 +270,7 @@ class MainForm : Form
             d["theme"] = s.Theme;
             d["hotkey"] = HotkeyManager.Describe(s.HotkeyMods, s.HotkeyVk);
             d["autostart"] = _autostartCached;
+            d["autostartBusy"] = _autostartBusy;
             d["eggBoost"] = s.EggBoost;
             var arr = new List<object>();
             for (int i = 0; i < s.Keys.Count; i++)
@@ -282,6 +290,11 @@ class MainForm : Form
             d["conflicts"] = FindConflicts();
             d["keyNames"] = KeyNames.CommonKeys;
             Send("state", d);
+            if (_hotkeyFailed)
+            {
+                _hotkeyFailed = false;
+                ShowToast("全局热键注册失败，可能已被其他程序占用", "err", 2500);
+            }
             if (_kbInstallFailed && !_kbFailureShown)
             {
                 _kbFailureShown = true;
@@ -296,6 +309,7 @@ class MainForm : Form
     {
         if (_autostartRefreshing) return;
         _autostartRefreshing = true;
+        int gen = _autostartGen;
         System.Threading.ThreadPool.QueueUserWorkItem(delegate
         {
             bool enabled = Autostart.IsEnabled();
@@ -303,7 +317,8 @@ class MainForm : Form
             {
                 BeginInvoke((Action)delegate
                 {
-                    _autostartCached = enabled;
+                    // 切换操作会递增 _autostartGen：它自己的结果才是权威值，查询结果不得覆盖
+                    if (gen == _autostartGen) _autostartCached = enabled;
                     _autostartRefreshing = false;
                     if (!IsDisposed) PushState();
                 });
@@ -376,13 +391,67 @@ class MainForm : Form
         }
         if (a == "setAutostart")
         {
+            // 上一轮 schtasks 尚未结束时忽略连击（前端同时显示忙碌）
+            if (_autostartBusy) return;
             bool on = Bridge.GetBool(m.Args, "on", !_autostartCached);
-            bool ok = Autostart.SetEnabled(on);
-            ShowToast(ok ? (on ? "已开启开机自启" : "已关闭开机自启") : "操作失败（需要管理员权限）",
-                ok ? "ok" : "err", 1800);
-            RefreshAutostartAsync();
+            _autostartBusy = true;
+            _autostartGen++;   // 作废正在执行/排队的查询结果
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                // schtasks 最长 8s，绝不能在 UI 线程同步执行
+                bool ok = Autostart.SetEnabled(on);
+                try
+                {
+                    BeginInvoke((Action)delegate
+                    {
+                        if (IsDisposed) return;
+                        _autostartBusy = false;
+                        _autostartGen++;   // 作废操作期间启动的查询
+                        if (ok) _autostartCached = on;   // 只有成功才更新缓存
+                        ShowToast(ok ? (on ? "已开启开机自启" : "已关闭开机自启") : "操作失败（需要管理员权限）",
+                            ok ? "ok" : "err", 1800);
+                        PushState();
+                    });
+                }
+                catch { }
+            });
             return;
         }
+        if (a == "setTheme")
+        {
+            // 主题是全局设置：只写指针文件，不写方案文件
+            string mode = Bridge.GetStr(m.Args, "mode", "Night");
+            s.Theme = mode == "Day" ? "Day" : "Night";
+            try { ConfigStore.SavePointer(s, System.IO.Path.Combine(_rt.ExeDir, "config.ini")); } catch { }
+            PushState();
+            return;
+        }
+        if (a == "chooseFolder")
+        {
+            using (var dlg = new FolderBrowserDialog())
+            {
+                dlg.Description = "选择配置文件的保存路径";
+                dlg.ShowNewFolderButton = true;
+                if (!string.IsNullOrEmpty(s.ConfigFolder) && Directory.Exists(s.ConfigFolder))
+                    dlg.SelectedPath = s.ConfigFolder;
+                if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(dlg.SelectedPath))
+                {
+                    s.ConfigFolder = dlg.SelectedPath;
+                    PopulateProfileComboIfNeeded();
+                    SaveSettingsNow();   // 新目录立即落盘方案与指针，避免防抖窗口内关窗丢设置
+                    ShowToast("配置文件位置已更新", "ok", 1600);
+                    PushState();
+                }
+            }
+            return;
+        }
+        if (a == "openHomepage")
+        {
+            try { System.Diagnostics.Process.Start(HomepageUrl); }
+            catch (Exception ex) { ShowToast("无法打开作者主页：" + ex.Message, "err", 2200); }
+            return;
+        }
+        if (a == "submitFeedback") { StartFeedbackFlow(); return; }
 
         // ---- 概览页动作：持久化 + 控制器联动 + 状态推送 ----
         if (a == "toggleEnabled")
@@ -606,13 +675,12 @@ class MainForm : Form
 
     void BeginCapture(string target, int index)
     {
-        if (target != "row")
+        if (target != "row" && target != "hotkey")
         {
-            // 热键捕获属于设置页（后续任务）
-            ShowToast("该功能将在后续版本启用", "info", 1200);
+            ShowToast("无法识别的捕获目标", "err", 1500);
             return;
         }
-        if (index < 0 || index >= _rt.Settings.Keys.Count) return;
+        if (target == "row" && (index < 0 || index >= _rt.Settings.Keys.Count)) return;
         if (_rt.Ctrl.IsTriggered)
         {
             ShowToast("触发中无法捕获，请先松开右键", "err", 1800);
@@ -626,7 +694,7 @@ class MainForm : Form
         if (_capturing) EndCapture();
         _capturing = true;
         _captureTarget = target;
-        _captureIndex = index;
+        _captureIndex = target == "row" ? index : -1;
         _captureVk = -1;
         _captureMods = 0;
         _keysDown.Clear();
@@ -716,6 +784,12 @@ class MainForm : Form
         uint mods = _captureMods;
         if (vk < 0) { EndCapture(); return; }
 
+        if (_captureTarget == "hotkey")
+        {
+            CommitHotkeyCapture(vk, mods);
+            return;
+        }
+
         int i = _captureIndex;
         if (i < 0 || i >= _rt.Settings.Keys.Count) { EndCapture(); return; }
         string name;
@@ -727,6 +801,91 @@ class MainForm : Form
         SaveSettings();
         EndCapture();
         PushState();
+    }
+
+    // 前端组合键位 1=Ctrl 2=Shift 4=Alt 8=Win；Win32 MOD_* 位序不同，必须转换
+    static uint ToWin32Mods(uint frontendMods)
+    {
+        uint r = 0;
+        if ((frontendMods & 1) != 0) r |= HotkeyManager.MOD_CONTROL;
+        if ((frontendMods & 2) != 0) r |= HotkeyManager.MOD_SHIFT;
+        if ((frontendMods & 4) != 0) r |= HotkeyManager.MOD_ALT;
+        if ((frontendMods & 8) != 0) r |= HotkeyManager.MOD_WIN;
+        return r;
+    }
+
+    void CommitHotkeyCapture(int vk, uint mods)
+    {
+        var s = _rt.Settings;
+        uint wmods = ToWin32Mods(mods);
+        if (!HotkeyManager.IsValid(wmods, (uint)vk))
+        {
+            EndCapture();
+            ShowToast("全局热键必须包含修饰键（如 Ctrl+F12）", "err", 2000);
+            PushState();
+            return;
+        }
+        if (!TryApplyHotkey(wmods, (uint)vk))
+        {
+            EndCapture();
+            ShowToast("热键已被其他程序占用，保留原热键 " + HotkeyManager.Describe(s.HotkeyMods, s.HotkeyVk),
+                "err", 2400);
+            PushState();
+            return;
+        }
+        s.HotkeyMods = wmods;
+        s.HotkeyVk = (uint)vk;
+        SaveSettings();
+        PushState();
+        EndCapture();
+        ShowToast("已设置全局热键：" + HotkeyManager.Describe(wmods, (uint)vk), "ok", 1600);
+    }
+
+    void InitHotkey()
+    {
+        var s = _rt.Settings;
+        try
+        {
+            if (_hotkey == null) _hotkey = new HotkeyManager(s.HotkeyMods, s.HotkeyVk);
+            if (_hotkey.Register(Handle, HotkeyId, s.HotkeyMods, s.HotkeyVk)) _hotkeyFailed = false;
+            else _hotkeyFailed = true;
+        }
+        catch { _hotkeyFailed = true; }
+    }
+
+    // 注册新热键；失败时 HotkeyManager 会自动恢复旧注册，这里返回 false 让调用方保留旧设置
+    bool TryApplyHotkey(uint mods, uint vk)
+    {
+        if (_hotkey == null)
+        {
+            // 句柄尚未创建：只更新设置，OnHandleCreated 时统一注册
+            _rt.Settings.HotkeyMods = mods;
+            _rt.Settings.HotkeyVk = vk;
+            return true;
+        }
+        try
+        {
+            bool ok = _hotkey.Register(Handle, HotkeyId, mods, vk);
+            if (ok) _hotkeyFailed = false;
+            return ok;
+        }
+        catch { return false; }
+    }
+
+    // 方案切换后热键可能不同：先释放旧注册再注册新的；失败则回退到实际仍生效的旧热键
+    void ApplyHotkeyFromSettings()
+    {
+        if (_hotkey == null) return;
+        var s = _rt.Settings;
+        if (_hotkey.Mods == s.HotkeyMods && _hotkey.Vk == s.HotkeyVk) return;
+        try
+        {
+            if (_hotkey.Register(Handle, HotkeyId, s.HotkeyMods, s.HotkeyVk)) { _hotkeyFailed = false; return; }
+        }
+        catch { }
+        s.HotkeyMods = _hotkey.Mods;
+        s.HotkeyVk = _hotkey.Vk;
+        _hotkeyFailed = true;
     }
 
     // ---- 测试面板 ----
@@ -784,6 +943,12 @@ class MainForm : Form
 
     // Task 12 会替换为原生透明悬浮窗实现
     void ShowEasterEgg() { }
+
+    // Task 14 接入完整的报错反馈流程（原 v1 的 FeedbackForm + err.jpg）
+    void StartFeedbackFlow()
+    {
+        ShowToast("报错反馈功能将在后续版本启用", "info", 1600);
+    }
 
     // ---- 设置持久化（500ms 防抖，切方案/新建/删除/关窗同步落盘） ----
     Timer _saveTimer;
@@ -858,6 +1023,7 @@ class MainForm : Form
         s.Keys.AddRange(loaded.Keys);
         _rt.Ctrl.RandomJitter = s.RandomJitter;
         _rt.Ctrl.SetThreshold(s.LongPressMs);
+        ApplyHotkeyFromSettings();   // 方案可能带不同热键：重新注册（内部先释放旧注册）
         _lastInTargetInit = false;
         try { ConfigStore.SavePointer(s, System.IO.Path.Combine(_rt.ExeDir, "config.ini")); } catch { }
         ApplyLinkageGate();
@@ -1052,6 +1218,18 @@ class MainForm : Form
 
     protected override void WndProc(ref Message m)
     {
+        if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotkeyId)
+        {
+            var s = _rt.Settings;
+            s.Enabled = !s.Enabled;
+            SaveSettings();
+            ApplyLinkageGate();
+            PushState();
+            if (!s.SuppressHotkeyToast)
+                ShowToast(s.Enabled ? "当前联动状态：启用" : "当前联动状态：禁用",
+                    s.Enabled ? "ok" : "err", 1200);
+            return;
+        }
         if (m.Msg == WM_NCHITTEST)
         {
             base.WndProc(ref m);
@@ -1102,6 +1280,7 @@ class MainForm : Form
             DwmSetWindowAttribute(Handle, 33, ref pref, sizeof(int));
         }
         catch { }
+        InitHotkey();   // 全局热键必须等窗口句柄存在后才能注册
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -1120,6 +1299,7 @@ class MainForm : Form
         if (_gateTimer != null) { _gateTimer.Stop(); _gateTimer.Dispose(); }
         if (_testTimer != null) { _testTimer.Stop(); _testTimer.Dispose(); }
         if (_saveTimer != null) { _saveTimer.Stop(); _saveTimer.Dispose(); }
+        try { if (_hotkey != null && IsHandleCreated) _hotkey.Unregister(Handle, HotkeyId); } catch { }
         if (_rt.KbHook != null) { _rt.KbHook.Dispose(); _rt.KbHook = null; }
         if (_skeleton != null) _skeleton.Visible = false;
         if (_skeletonLogo != null) { _skeletonLogo.Dispose(); _skeletonLogo = null; }
