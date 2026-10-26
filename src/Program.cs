@@ -148,9 +148,25 @@ class Program
         rt.Hook = hook;
         rt.Ctrl = new TriggerController(new SendInputKeySender(), settings.Keys, settings.LongPressMs, settings.Enabled);
         rt.Ctrl.RandomJitter = settings.RandomJitter;
-        rt.WebDir = WebAssets.Extract(AppVersion);
 
-        Application.Run(new MainForm(rt));
-        hook.Dispose();
+        try
+        {
+            try
+            {
+                rt.WebDir = WebAssets.Extract(AppVersion);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("无法解压界面资源：" + ex.Message, "右键长按联动器",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            Application.Run(new MainForm(rt));
+        }
+        finally
+        {
+            hook.Dispose();
+        }
     }
 }

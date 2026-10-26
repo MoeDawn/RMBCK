@@ -22,6 +22,7 @@ class MainForm : Form
         KeyPreview = true;
         Text = "右键长按联动器";
 
+        Padding = new Padding(BORDER);   // 6px 原生缩放边：WebView2 不覆盖窗体边缘
         _wv = new WebView2();
         _wv.Dock = DockStyle.Fill;
         Controls.Add(_wv);
@@ -107,8 +108,10 @@ class MainForm : Form
             base.WndProc(ref m);
             if ((int)m.Result == HTCLIENT)
             {
-                Point p = PointToClient(new Point(m.LParam.ToInt32() & 0xFFFF,
-                    (m.LParam.ToInt32() >> 16) & 0xFFFF));
+                long lp = m.LParam.ToInt64();
+                short sx = unchecked((short)(lp & 0xFFFF));
+                short sy = unchecked((short)((lp >> 16) & 0xFFFF));
+                Point p = PointToClient(new Point(sx, sy));
                 int w = ClientSize.Width, h = ClientSize.Height;
                 bool l = p.X <= BORDER, r = p.X >= w - BORDER;
                 bool t = p.Y <= BORDER, b = p.Y >= h - BORDER;
@@ -150,5 +153,12 @@ class MainForm : Form
             DwmSetWindowAttribute(Handle, 33, ref pref, sizeof(int));
         }
         catch { }
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _tick.Stop();
+        _tick.Dispose();
+        base.OnFormClosed(e);
     }
 }
