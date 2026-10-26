@@ -200,14 +200,22 @@ class MainForm : Form
                 try { OnAction(m); }
                 catch (Exception ex) { ShowToast("操作失败：" + ex.Message, "err", 2000); }
             };
-            core.NavigationCompleted += delegate
+            core.NavigationCompleted += delegate(object s, CoreWebView2NavigationCompletedEventArgs e)
             {
-                _ready = true;
                 if (!_firstNavigationDone)
                 {
                     _firstNavigationDone = true;
+                    if (!e.IsSuccess)
+                    {
+                        // 首次导航失败：保留骨架，走与初始化异常相同的友好退出路径
+                        MessageBox.Show("界面加载失败：" + e.WebErrorStatus, "右键长按联动器",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        Close();
+                        return;
+                    }
                     ShowRealPage();          // 首次导航完成：一次性换掉原生骨架
                 }
+                _ready = true;
                 if (_pageReady) PushState();
             };
             RefreshAutostartAsync();
@@ -346,15 +354,9 @@ class MainForm : Form
             return;
         }
         if (a == "dragStart") { BeginDrag(); return; }
-        if (a == "minimizeToTray")
+        if (a == "minimizeToTray" || a == "closeRequest")
         {
-            // Task 13 实现真正的托盘逻辑
-            ShowToast("该功能将在后续版本启用", "info", 1200);
-            return;
-        }
-        if (a == "closeRequest")
-        {
-            // Task 13 实现真正的关闭逻辑
+            // Task 13 实现真正的托盘/关闭逻辑
             ShowToast("该功能将在后续版本启用", "info", 1200);
             return;
         }
@@ -441,9 +443,12 @@ class MainForm : Form
     void StopTestTimer()
     {
         if (_testTimer != null) _testTimer.Stop();
+        string target;
+        if (string.IsNullOrEmpty(_rt.Settings.TargetProcess)) target = "未选择（全局生效）";
+        else target = TargetForegroundActive() ? "已联动目标进程" : "请切换至目标进程窗口";
         Send("testStatus", new Dictionary<string, object>
         {
-            { "down", false }, { "keys", "" }, { "physical", "" }, { "target", "" }
+            { "down", false }, { "keys", "" }, { "physical", "" }, { "target", target }
         });
     }
 
@@ -606,7 +611,18 @@ class MainForm : Form
             ShowToast("至少需要保留一个配置方案", "err", 1800);
             return;
         }
-        if (string.IsNullOrEmpty(name) || !list.Contains(name)) name = s.Profile;
+        string resolved = null;
+        if (!string.IsNullOrEmpty(name))
+        {
+            foreach (string n in list)
+                if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) { resolved = n; break; }
+        }
+        if (resolved == null)
+        {
+            ShowToast("方案不存在", "err", 1800);
+            return;
+        }
+        name = resolved;
         bool wasCurrent = string.Equals(name, s.Profile, StringComparison.OrdinalIgnoreCase);
         ConfigStore.DeleteProfile(ProfileDir(), name);
         list.RemoveAll(delegate(string n) { return string.Equals(n, name, StringComparison.OrdinalIgnoreCase); });
@@ -637,6 +653,7 @@ class MainForm : Form
 
     // ---- 前台进程门控 ----
     bool _linkageActive;
+    bool _gateInitialised;
     bool _lastInTarget;
     bool _lastInTargetInit;
     readonly Random _rng = new Random();
@@ -680,14 +697,23 @@ class MainForm : Form
         var s = _rt.Settings;
         bool inTarget = TargetForegroundActive();
         bool active = s.Enabled && inTarget;
-        if (active != _linkageActive)
+        // 首次求值必须权威：TriggerController 以 settings.Enabled 构造，可能与门控结果相反
+        bool first = !_gateInitialised;
+        if (first)
+        {
+            _gateInitialised = true;
+            _linkageActive = active;
+            _rt.Ctrl.SetEnabled(active);
+        }
+        else if (active != _linkageActive)
         {
             _linkageActive = active;
             _rt.Ctrl.SetEnabled(active);
         }
         if (s.Enabled && !string.IsNullOrEmpty(s.TargetProcess))
         {
-            if (_lastInTargetInit && inTarget != _lastInTarget)
+            // 首次求值只记录基线，不发“切换进程”提示，避免启动时误报
+            if (!first && _lastInTargetInit && inTarget != _lastInTarget)
             {
                 if (inTarget)
                 {

@@ -186,6 +186,7 @@
     c3.appendChild(el("h3", null, "测试"));
     var row3 = el("div", "row");
     var testBtn = el("button", "btn", window.__testing ? "停止测试" : "开始测试");
+    testBtn.id = "testBtn";
     testBtn.onclick = function () {
       window.__testing = !window.__testing;
       send(window.__testing ? "startTest" : "stopTest");
@@ -193,14 +194,35 @@
     };
     row3.appendChild(testBtn);
     var st = window.__testStatus || {};
-    row3.appendChild(el("span", "muted", st.down ? "右键：按下" : "右键：释放"));
+    var testDown = el("span", "muted", st.down ? "右键：按下" : "右键：释放");
+    testDown.id = "testDown";
+    row3.appendChild(testDown);
     c3.appendChild(row3);
     var lines = el("div", "testLines");
-    lines.appendChild(el("div", "muted", "触发键位：" + (st.keys || "无")));
-    lines.appendChild(el("div", "muted", "实际按下：" + (st.physical || "无")));
-    lines.appendChild(el("div", "muted", "目标进程：" + (st.target || "未选择（全局生效）")));
+    var testKeys = el("div", "muted", "触发键位：" + (st.keys || "无"));
+    testKeys.id = "testKeys";
+    var testPhysical = el("div", "muted", "实际按下：" + (st.physical || "无"));
+    testPhysical.id = "testPhysical";
+    var testTarget = el("div", "muted", "目标进程：" + (st.target || "未选择（全局生效）"));
+    testTarget.id = "testTarget";
+    lines.appendChild(testKeys);
+    lines.appendChild(testPhysical);
+    lines.appendChild(testTarget);
     c3.appendChild(lines);
     p.appendChild(c3);
+  };
+
+  // testStatus 每 100ms 到达一次：只更新文本，不重建页面（否则按钮/滑块会被销毁）
+  window.updateTestPanel = function (data) {
+    var down = $("testDown"), keys = $("testKeys"), phys = $("testPhysical"), target = $("testTarget");
+    if (!down && !keys && !phys && !target) return;
+    var st = data || {};
+    if (down) down.textContent = st.down ? "右键：按下" : "右键：释放";
+    if (keys) keys.textContent = "触发键位：" + (st.keys || "无");
+    if (phys) phys.textContent = "实际按下：" + (st.physical || "无");
+    if (target) target.textContent = "目标进程：" + (st.target || "未选择（全局生效）");
+    var btn = $("testBtn");
+    if (btn) btn.textContent = window.__testing ? "停止测试" : "开始测试";
   };
 
   function promptProfileName() {
@@ -312,7 +334,8 @@
       }
       else if (msg.type === "testStatus") {
         window.__testStatus = data;
-        if (page === "overview") render();
+        // 原地更新测试面板；不要 render()，否则 10Hz 刷新会销毁按钮/滑块并打断交互
+        window.updateTestPanel(data);
       }
       else if (msg.type === "capturing") {
         window.__capturing = data;
