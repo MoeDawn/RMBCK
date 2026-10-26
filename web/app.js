@@ -28,6 +28,8 @@
   window.__applyTheme = applyTheme;
 
   function showPage(name) {
+    // 捕获是全局监听：离开当前页面前必须撤销，避免在不可见的行上静默改写键位
+    if (window.__capturing && window.__capturing.active) send("cancelCapture", {});
     page = name;
     var btns = document.querySelectorAll(".navBtn");
     for (var i = 0; i < btns.length; i++)
@@ -160,7 +162,7 @@
     delay.min = "0";
     delay.max = "2000";
     delay.value = k.delay;
-    delay.disabled = k.mode === "Hold";
+    delay.title = "到达检测时间后再延迟该毫秒数触发本行";
     delay.onchange = function () {
       var v = parseInt(delay.value, 10);
       if (isNaN(v)) v = 0;
@@ -188,9 +190,61 @@
     return r;
   }
 
+  var _pointerDownAt = 0;
+  var _pendingKeysRender = false;
+
+  function keysSignature(s) {
+    var keys = s.keys || [];
+    var rows = [];
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      rows.push([k.index, k.enabled, k.name, k.mode, k.mods, k.repeat, k.delay]);
+    }
+    return JSON.stringify(rows);
+  }
+
+  function captureSignature() {
+    var c = window.__capturing;
+    if (c) return c.active ? (c.target || "") + ":" + (c.index == null ? "" : c.index) : "";
+    return window.__captureRow == null ? "" : "row:" + window.__captureRow;
+  }
+
+  document.addEventListener("mousedown", function (e) {
+    if (e.button !== 0 || page !== "keys") return;
+    if (e.target && e.target.closest && e.target.closest("#page-keys"))
+      _pointerDownAt = Date.now();
+  }, true);
+  document.addEventListener("mouseup", function (e) {
+    if (e.button !== 0) return;
+    var had = _pointerDownAt > 0;
+    _pointerDownAt = 0;
+    if (had && _pendingKeysRender) {
+      _pendingKeysRender = false;
+      // 让本轮 mouseup/click 先处理完，再重建，避免销毁用户正在点击的按钮
+      setTimeout(function () { if (page === "keys") render(); }, 30);
+    }
+  }, true);
+  window.addEventListener("blur", function () {
+    _pointerDownAt = 0;
+    if (_pendingKeysRender) {
+      _pendingKeysRender = false;
+      if (page === "keys") render();
+    }
+  });
+
   window.render_keys = function (s) {
     var p = document.getElementById("page-keys");
     if (!p) return;
+
+    // 状态没变（含捕获指示）就不重建，避免在用户点击途中销毁控件
+    var sig = keysSignature(s) + "||" + captureSignature();
+    if (window.__keysRenderSig === sig) return;
+    if (_pointerDownAt > 0 && Date.now() - _pointerDownAt < 2000) {
+      _pendingKeysRender = true;
+      return;
+    }
+    _pendingKeysRender = false;
+
     p.innerHTML = "";
 
     var conflicts = s.conflicts || [];
@@ -217,6 +271,7 @@
     add.onclick = function () { send("addKey", {}); };
     card.appendChild(add);
     p.appendChild(card);
+    window.__keysRenderSig = sig;
   };
 
   // ---------- 概览页 ----------

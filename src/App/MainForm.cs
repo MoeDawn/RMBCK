@@ -369,7 +369,8 @@ class MainForm : Form
         if (a == "dragStart") { BeginDrag(); return; }
         if (a == "minimizeToTray" || a == "closeRequest")
         {
-            // Task 13 实现真正的托盘/关闭逻辑
+            // Task 13 实现真正的托盘/关闭逻辑；离开界面前先撤销进行中的捕获
+            CancelCapture();
             ShowToast("该功能将在后续版本启用", "info", 1200);
             return;
         }
@@ -427,6 +428,8 @@ class MainForm : Form
             int i = Bridge.GetInt(m.Args, "index", -1);
             if (i >= 0 && i < s.Keys.Count)
             {
+                // 控制器按行索引记录已触发键；触发中删行会让松开时释放错键，先干净松开
+                if (_rt.Ctrl.IsTriggered) _rt.Ctrl.OnRightUp();
                 // 删除会移动行索引，进行中的捕获目标可能错位，直接取消
                 if (_capturing) EndCapture();
                 s.Keys.RemoveAt(i);
@@ -491,6 +494,11 @@ class MainForm : Form
             BeginCapture(Bridge.GetStr(m.Args, "target", ""), Bridge.GetInt(m.Args, "index", -1));
             return;
         }
+        if (a == "cancelCapture")
+        {
+            CancelCapture();
+            return;
+        }
     }
 
     void ApplySetting(string key, Dictionary<string, object> args)
@@ -538,6 +546,11 @@ class MainForm : Form
             return;
         }
         if (index < 0 || index >= _rt.Settings.Keys.Count) return;
+        if (_rt.Ctrl.IsTriggered)
+        {
+            ShowToast("触发中无法捕获，请先松开右键", "err", 1800);
+            return;
+        }
         if (_rt.KbHook == null || _kbInstallFailed)
         {
             ShowToast("键盘钩子不可用，无法捕获按键", "err", 1800);
@@ -569,11 +582,22 @@ class MainForm : Form
         });
     }
 
+    // 离开按键页 / 窗口隐藏或关闭时统一撤销捕获（不改任何行）
+    void CancelCapture()
+    {
+        if (_capturing) EndCapture();
+        PushState();
+    }
+
     // 由 KeyboardHook 调用（UI 线程）。必须自行维护按下集合：
     // 1) 过滤按住不放产生的自动重复
     // 2) 等到主键松开才提交，给用户补按其它修饰键的机会
     void HandleCapturedKey(int vk, bool down)
     {
+        // 触发期间的键盘事件可能来自本程序 SendInput 的自动按键（IsTriggered 覆盖
+        // OnTick 的 KeyDown/KeyTap 以及 OnRightUp 的 KeyUp），不能参与捕获
+        if (_rt.Ctrl.IsTriggered) return;
+
         if (!_capturing)
         {
             if (down) _lastVk = vk;   // 概览测试面板的“实际按下”
@@ -1009,6 +1033,8 @@ class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        // 捕获不能随窗口关闭而残留；钩子会在 OnFormClosed 中卸载
+        if (_capturing) EndCapture();
         // 防抖静默期内关窗不丢数据
         SaveSettingsNow();
         base.OnFormClosing(e);
