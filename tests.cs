@@ -19,6 +19,7 @@ class TestRunner
         TestConfigStore();
         TestTriggerController();
         TestTriggerDelayAndMods();
+        TestWebAssets();
         if (_fail > 0) { Console.WriteLine(_fail + " 个测试失败"); return 1; }
         Console.WriteLine("全部通过"); return 0;
     }
@@ -369,6 +370,17 @@ class TestRunner
         d9.OnTick(300);
         Assert(r9.Calls.Count == 1 && r9.Calls[0] == "D81", "负数 DelayMs 视为 0，阈值当拍触发");
         d9.OnRightUp();
+    }
+
+    static void TestWebAssets()
+    {
+        Section("WebAssets 资源映射");
+        Assert(WebAssets.Map.Count >= 10, "资源映射至少 10 项");
+        Assert(WebAssets.Map.ContainsKey("RMBCK.web.index.html"), "含 index.html 映射");
+        Assert(WebAssets.Map["RMBCK.web.index.html"] == "index.html", "index.html 相对路径正确");
+        Assert(WebAssets.Map["RMBCK.web.assets.icon.png"] == "assets/icon.png", "assets 子目录映射正确");
+        string txt = WebAssets.ReadText("index.html");
+        Assert(txt != null && txt.IndexOf("<html") >= 0, "ReadText 读取 index.html");
     }
 }
 

@@ -1,0 +1,4 @@
+:root { color-scheme: dark; }
+html, body { margin: 0; height: 100%; background: #12141c; color: #e8eaf3;
+  font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; }
+#boot { padding: 24px; font-size: 14px; }
