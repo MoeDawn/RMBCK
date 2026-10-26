@@ -332,6 +332,43 @@ class TestRunner
         Assert(d6.FiredLabels.Count == 1 && d6.FiredLabels[0].IndexOf("Q") >= 0, "触发后 FiredLabels 含 Q");
         d6.OnRightUp();
         Assert(d6.FiredLabels.Count == 0, "松开后 FiredLabels 清空");
+
+        // 仅已触发的 Hold 行才保留修饰键（未到延迟的 Hold 行不得扣住修饰键）
+        var r7 = new RecordingKeySender();
+        var d7 = new TriggerController(r7, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.TapOnce, DelayMs = 0, Mods = 1 },
+            new KeyConfig { Enabled = true, Name = "X", Vk = 0x58, Mode = KeyMode.Hold, DelayMs = 2000, Mods = 1 } }, 300, true);
+        d7.OnRightDown(0); d7.OnTick(300);
+        Assert(string.Join(",", r7.Calls.ToArray()) == "D17,T81,U17", "TapOnce 点按后修饰键立即释放，未被未到点的 Hold 行扣住");
+        d7.OnTick(2300);
+        Assert(string.Join(",", r7.Calls.ToArray()) == "D17,T81,U17,D17,D88", "延迟 Hold 行到点后才按修饰键与主键");
+        d7.OnRightUp();
+        Assert(string.Join(",", r7.Calls.ToArray()) == "D17,T81,U17,D17,D88,U88,U17", "松开时先放 Hold 主键再放修饰键");
+
+        // 同一 Vk 两行不同模式：按行索引独立（TapOnce 只点一次，TapRepeat 持续连发）
+        var r8 = new RecordingKeySender();
+        var d8 = new TriggerController(r8, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.TapOnce, DelayMs = 0 },
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.TapRepeat, RepeatIntervalMs = 100 } }, 300, true);
+        d8.OnRightDown(0); d8.OnTick(300);
+        Assert(r8.Calls.Count == 2, "同键不同模式：两行各自首次触发");
+        d8.OnTick(400);
+        Assert(r8.Calls.Count == 3, "同键不同模式：TapRepeat 行 400ms 连发");
+        d8.OnTick(450);
+        Assert(r8.Calls.Count == 3, "同键不同模式：450ms 间隔未到不再发");
+        d8.OnTick(500);
+        Assert(r8.Calls.Count == 4, "同键不同模式：TapRepeat 行 500ms 再连发");
+        d8.OnRightUp();
+
+        // 负数 DelayMs 视为 0
+        var r9 = new RecordingKeySender();
+        var d9 = new TriggerController(r9, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold, DelayMs = -500 } }, 300, true);
+        d9.OnRightDown(0); d9.OnTick(299);
+        Assert(r9.Calls.Count == 0, "负数 DelayMs 不导致提前触发");
+        d9.OnTick(300);
+        Assert(r9.Calls.Count == 1 && r9.Calls[0] == "D81", "负数 DelayMs 视为 0，阈值当拍触发");
+        d9.OnRightUp();
     }
 }
 

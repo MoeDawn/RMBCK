@@ -97,7 +97,7 @@ class TriggerController
             for (int i = _config.Count - 1; i >= 0; i--)
             {
                 var kc = _config[i];
-                if (kc.Enabled && kc.Mode == KeyMode.Hold && WasFired(i)) _keys.KeyUp(kc.Vk);
+                if (kc.Mode == KeyMode.Hold && WasFired(i)) _keys.KeyUp(kc.Vk);
             }
             ReleaseMods();
             _triggered = false;
@@ -140,8 +140,12 @@ class TriggerController
     void ReleaseModsNotNeededByHold()
     {
         int needed = 0;
-        foreach (var kc in _config)
-            if (kc.Enabled && kc.Mode == KeyMode.Hold) needed |= MaskMods(kc.Mods);
+        for (int j = 0; j < _config.Count; j++)
+        {
+            var kc = _config[j];
+            // 只有已经真正触发的 Hold 行才需要保留修饰键；尚未到延迟/未触发的行不得扣住
+            if (kc.Enabled && kc.Mode == KeyMode.Hold && WasFired(j)) needed |= MaskMods(kc.Mods);
+        }
         for (int i = _heldMods.Count - 1; i >= 0; i--)
         {
             int vk = _heldMods[i];
