@@ -104,6 +104,158 @@
     return b;
   };
 
+  // ---------- 概览页 ----------
+  window.render_overview = function (s) {
+    var p = document.getElementById("page-overview");
+    if (!p) return;
+    p.innerHTML = "";
+
+    // 总开关 + 方案
+    var c1 = el("div", "card");
+    c1.appendChild(el("h3", null, "联动"));
+    var row1 = el("div", "row");
+    row1.appendChild(window.__switch(s.enabled, function (v) { send("toggleEnabled", { enabled: v }); }));
+    row1.appendChild(el("span", "muted", s.enabled ? "当前联动状态：启用" : "当前联动状态：禁用"));
+    row1.appendChild(el("span", "spacer"));
+    var sel = el("select");
+    var profiles = s.profiles || [];
+    var hasCurrent = false;
+    profiles.forEach(function (n) {
+      var o = el("option", null, n);
+      o.value = n;
+      if (n === s.profile) { o.selected = true; hasCurrent = true; }
+      sel.appendChild(o);
+    });
+    // 方案文件缺失时仍然展示当前方案，避免下拉框空白
+    if (!hasCurrent && s.profile) {
+      var cur = el("option", null, s.profile);
+      cur.value = s.profile;
+      cur.selected = true;
+      sel.appendChild(cur);
+    }
+    sel.onchange = function () { send("setProfile", { name: sel.value }); };
+    row1.appendChild(sel);
+    var bNew = el("button", "btn", "＋ 新建");
+    bNew.onclick = function () { promptProfileName(); };
+    var bDel = el("button", "btnGhost", "－ 删除");
+    bDel.onclick = function () { confirmDeleteProfile(s.profile); };
+    row1.appendChild(bNew);
+    row1.appendChild(bDel);
+    c1.appendChild(row1);
+    c1.appendChild(el("div", "muted", "全局热键 " + s.hotkey + " 可随时切换联动开关（游戏内生效）"));
+    p.appendChild(c1);
+
+    // 阈值 + 随机化
+    var c2 = el("div", "card");
+    c2.appendChild(el("h3", null, "触发设置"));
+    var row2 = el("div", "row");
+    row2.appendChild(el("span", "muted", "长按检测时间"));
+    var rng = el("input");
+    rng.type = "range";
+    rng.min = "100";
+    rng.max = "2000";
+    rng.step = "10";
+    rng.value = s.longPressMs;
+    rng.style.width = "260px";
+    var num = el("input");
+    num.type = "number";
+    num.min = "100";
+    num.max = "2000";
+    num.value = s.longPressMs;
+    num.style.width = "74px";
+    var commit = function (v) {
+      v = Math.max(100, Math.min(2000, parseInt(v, 10) || 300));
+      rng.value = v;
+      num.value = v;
+      send("setSetting", { key: "longPressMs", value: v });
+    };
+    rng.oninput = function () { num.value = rng.value; };
+    rng.onchange = function () { commit(rng.value); };
+    num.onchange = function () { commit(num.value); };
+    row2.appendChild(rng);
+    row2.appendChild(num);
+    row2.appendChild(el("span", "muted", "ms"));
+    row2.appendChild(el("span", "spacer"));
+    row2.appendChild(el("span", "muted", "随机化防检测"));
+    row2.appendChild(window.__switch(s.randomJitter, function (v) { send("setSetting", { key: "randomJitter", value: v }); }));
+    c2.appendChild(row2);
+    p.appendChild(c2);
+
+    // 测试面板
+    var c3 = el("div", "card");
+    c3.appendChild(el("h3", null, "测试"));
+    var row3 = el("div", "row");
+    var testBtn = el("button", "btn", window.__testing ? "停止测试" : "开始测试");
+    testBtn.onclick = function () {
+      window.__testing = !window.__testing;
+      send(window.__testing ? "startTest" : "stopTest");
+      render();
+    };
+    row3.appendChild(testBtn);
+    var st = window.__testStatus || {};
+    row3.appendChild(el("span", "muted", st.down ? "右键：按下" : "右键：释放"));
+    c3.appendChild(row3);
+    var lines = el("div", "testLines");
+    lines.appendChild(el("div", "muted", "触发键位：" + (st.keys || "无")));
+    lines.appendChild(el("div", "muted", "实际按下：" + (st.physical || "无")));
+    lines.appendChild(el("div", "muted", "目标进程：" + (st.target || "未选择（全局生效）")));
+    c3.appendChild(lines);
+    p.appendChild(c3);
+  };
+
+  function promptProfileName() {
+    var w = $("modalWrap");
+    w.innerHTML = "";
+    var m = el("div", "modal");
+    m.setAttribute("role", "dialog");
+    m.setAttribute("aria-modal", "true");
+    m.appendChild(el("h4", null, "新建配置方案"));
+    var inp = el("input");
+    inp.type = "text";
+    inp.placeholder = "方案名称（最多 20 字）";
+    inp.style.width = "100%";
+    m.appendChild(inp);
+    var acts = el("div", "actions");
+    var bCancel = el("button", "btnGhost", "取消");
+    var bOk = el("button", "btn", "创建");
+    bCancel.onclick = function () { w.classList.remove("show"); };
+    bOk.onclick = function () {
+      w.classList.remove("show");
+      send("newProfile", { name: inp.value });
+    };
+    acts.appendChild(bCancel);
+    acts.appendChild(bOk);
+    m.appendChild(acts);
+    w.appendChild(m);
+    w.classList.add("show");
+    inp.focus();
+  }
+  window.__promptProfileName = promptProfileName;
+
+  function confirmDeleteProfile(name) {
+    var w = $("modalWrap");
+    w.innerHTML = "";
+    var m = el("div", "modal");
+    m.setAttribute("role", "dialog");
+    m.setAttribute("aria-modal", "true");
+    m.appendChild(el("h4", null, "删除配置方案"));
+    m.appendChild(el("div", "muted", "确定删除「" + name + "」？此操作不可恢复。"));
+    var acts = el("div", "actions");
+    var bCancel = el("button", "btnGhost", "取消");
+    var bOk = el("button", "btnDanger", "删除");
+    bCancel.onclick = function () { w.classList.remove("show"); };
+    bOk.onclick = function () {
+      w.classList.remove("show");
+      send("deleteProfile", { name: name });
+    };
+    acts.appendChild(bCancel);
+    acts.appendChild(bOk);
+    m.appendChild(acts);
+    w.appendChild(m);
+    w.classList.add("show");
+  }
+  window.__confirmDeleteProfile = confirmDeleteProfile;
+
   // 事件委托：导航
   document.addEventListener("click", function (e) {
     var t = e.target;

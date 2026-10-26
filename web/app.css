@@ -142,3 +142,15 @@ input[type=range]:active::-webkit-slider-thumb { background: var(--accent2Active
 input[type=text], input[type=number], select {
   padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--cardHi); color: var(--text); font: inherit; font-size: 12px; }
+
+/* ---------- 概览页 ---------- */
+#page-overview select { min-width: 120px; max-width: 190px; text-overflow: ellipsis; }
+#page-overview input[type=number] { text-align: right; }
+#page-overview .card .row + .muted { margin-top: 10px; }
+#page-overview .row > input:focus-visible,
+#page-overview .row > select:focus-visible {
+  outline: 2px solid var(--sel); outline-offset: 1px; border-color: var(--accent2);
+}
+.testLines { display: flex; flex-direction: column; gap: 4px; margin-top: 12px;
+  padding-top: 10px; border-top: 1px solid var(--line); }
+.testLines .muted { transition: color .16s ease; }

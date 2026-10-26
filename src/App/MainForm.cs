@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -14,6 +16,11 @@ class MainForm : Form
     bool _pageReady;
     bool _autostartCached;
     volatile bool _autostartRefreshing;
+
+    // 启动骨架：WebView2 首次启动约 5s，窗口立即显示原生占位内容
+    Panel _skeleton;
+    Image _skeletonLogo;
+    bool _firstNavigationDone;
 
     public MainForm(AppRuntime rt)
     {
@@ -29,7 +36,9 @@ class MainForm : Form
         Padding = new Padding(BORDER);   // 6px 原生缩放边：WebView2 不覆盖窗体边缘
         _wv = new WebView2();
         _wv.Dock = DockStyle.Fill;
+        _wv.Visible = false;             // 首次 NavigationCompleted 后再显示
         Controls.Add(_wv);
+        BuildSkeleton();
 
         // 鼠标钩子：10ms 轮询触发判定（与 1.1.0 一致）
         _rt.Hook.RightButtonDown += delegate { _rt.Ctrl.OnRightDown(Environment.TickCount); };
@@ -40,10 +49,21 @@ class MainForm : Form
         _tick.Tick += delegate { OnTickHandler(); };
         _tick.Start();
 
-        Load += delegate { InitWebAsync(); };
+        // 前台进程门控独立 750ms：进程查询频率低（与 1.1.0 一致）
+        _gateTimer = new Timer();
+        _gateTimer.Interval = 750;
+        _gateTimer.Tick += delegate { ApplyLinkageGate(); };
+        _gateTimer.Start();
+
+        PopulateProfileComboIfNeeded();
+        ApplyLinkageGate();
+
+        // 先把骨架提交到消息队列并完成首帧，再启动 WebView2（InitWebAsync 的同步初始化不能挡住首绘）
+        Load += delegate { BeginInvoke((Action)InitWebAsync); };
     }
 
     Timer _tick;
+    Timer _gateTimer;
 
     // Task 7 阶段：仅轮询触发；Task 11 扩展为写入触发日志
     void OnTickHandler()
@@ -68,8 +88,93 @@ class MainForm : Form
         return false;
     }
 
+    // ---- 启动骨架 ----
+    void BuildSkeleton()
+    {
+        _skeleton = new Panel();
+        _skeleton.Dock = DockStyle.Fill;
+        _skeleton.BackColor = Color.FromArgb(18, 20, 28);
+
+        var layout = new TableLayoutPanel();
+        layout.Dock = DockStyle.Fill;
+        layout.BackColor = Color.FromArgb(18, 20, 28);
+        layout.ColumnCount = 1;
+        layout.RowCount = 5;
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+
+        var logo = new PictureBox();
+        logo.Size = new Size(64, 64);
+        logo.SizeMode = PictureBoxSizeMode.Zoom;
+        logo.Anchor = AnchorStyles.None;
+        logo.Margin = new Padding(0, 0, 0, 12);
+        try
+        {
+            using (Stream st = typeof(MainForm).Assembly.GetManifestResourceStream("RMBCK.web.assets.icon.png"))
+            {
+                if (st != null)
+                {
+                    using (Image img = Image.FromStream(st))
+                        _skeletonLogo = new Bitmap(img, 64, 64);
+                    logo.Image = _skeletonLogo;
+                }
+            }
+        }
+        catch { /* 图标缺失时保留纯文字骨架 */ }
+        if (logo.Image == null) logo.Visible = false;
+
+        var title = new Label();
+        title.Text = "正在加载界面…";
+        title.AutoSize = true;
+        title.Anchor = AnchorStyles.None;
+        title.ForeColor = Color.FromArgb(154, 163, 184);
+        title.BackColor = Color.Transparent;
+        title.Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Regular);
+        title.Margin = new Padding(0, 0, 0, 4);
+
+        var hint = new Label();
+        hint.Text = "请稍候";
+        hint.AutoSize = true;
+        hint.Anchor = AnchorStyles.None;
+        hint.ForeColor = Color.FromArgb(154, 163, 184);
+        hint.BackColor = Color.Transparent;
+        hint.Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Regular);
+        hint.Margin = new Padding(0);
+
+        layout.Controls.Add(logo, 0, 1);
+        layout.Controls.Add(title, 0, 2);
+        layout.Controls.Add(hint, 0, 3);
+        _skeleton.Controls.Add(layout);
+        Controls.Add(_skeleton);
+        _skeleton.BringToFront();
+    }
+
+    void ShowRealPage()
+    {
+        if (IsDisposed || Disposing) return;
+        try
+        {
+            if (_skeleton != null) _skeleton.Visible = false;
+            _wv.Visible = true;
+            _wv.BringToFront();
+        }
+        catch { }
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        // DLP 环境下 WM_PAINT 可能丢失：骨架首显强制重绘一次
+        if (_skeleton != null) { _skeleton.Invalidate(true); _skeleton.Update(); }
+    }
+
     async void InitWebAsync()
     {
+        if (IsDisposed) return;
         try
         {
             string udf = System.IO.Path.Combine(
@@ -98,6 +203,11 @@ class MainForm : Form
             core.NavigationCompleted += delegate
             {
                 _ready = true;
+                if (!_firstNavigationDone)
+                {
+                    _firstNavigationDone = true;
+                    ShowRealPage();          // 首次导航完成：一次性换掉原生骨架
+                }
                 if (_pageReady) PushState();
             };
             RefreshAutostartAsync();
@@ -236,9 +346,15 @@ class MainForm : Form
             return;
         }
         if (a == "dragStart") { BeginDrag(); return; }
-        if (a == "minimizeToTray" || a == "closeRequest")
+        if (a == "minimizeToTray")
         {
-            // Task 13 实现真正的托盘/关闭逻辑
+            // Task 13 实现真正的托盘逻辑
+            ShowToast("该功能将在后续版本启用", "info", 1200);
+            return;
+        }
+        if (a == "closeRequest")
+        {
+            // Task 13 实现真正的关闭逻辑
             ShowToast("该功能将在后续版本启用", "info", 1200);
             return;
         }
@@ -252,45 +368,32 @@ class MainForm : Form
             return;
         }
 
-        // Task 5 仅回显内存状态；Task 7 接管持久化与控制器联动
+        // ---- 概览页动作：持久化 + 控制器联动 + 状态推送 ----
         if (a == "toggleEnabled")
         {
             s.Enabled = Bridge.GetBool(m.Args, "enabled", !s.Enabled);
+            SaveSettings();
+            ApplyLinkageGate();
             PushState();
             return;
         }
         if (a == "setSetting")
         {
             ApplySetting(Bridge.GetStr(m.Args, "key", ""), m.Args);
+            SaveSettings();
             PushState();
             return;
         }
         if (a == "setProfile")
         {
             string name = Bridge.GetStr(m.Args, "name", "");
-            if (name.Length > 0) s.Profile = name;
-            PushState();
+            if (name.Length > 0 && name != s.Profile) SwitchProfile(name);
             return;
         }
-        if (a == "newProfile")
-        {
-            string name = Bridge.GetStr(m.Args, "name", "").Trim();
-            if (name.Length > 0) s.Profile = name;
-            PushState();
-            return;
-        }
-        if (a == "deleteProfile")
-        {
-            string name = Bridge.GetStr(m.Args, "name", "");
-            if (name.Length > 0 && name == s.Profile) s.Profile = AppSettings.DefaultProfileName;
-            PushState();
-            return;
-        }
-        if (a == "startTest" || a == "stopTest")
-        {
-            PushState();
-            return;
-        }
+        if (a == "newProfile") { NewProfile(Bridge.GetStr(m.Args, "name", "")); return; }
+        if (a == "deleteProfile") { DeleteProfile(Bridge.GetStr(m.Args, "name", "")); return; }
+        if (a == "startTest") { _testing = true; StartTestTimer(); return; }
+        if (a == "stopTest") { _testing = false; StopTestTimer(); return; }
     }
 
     void ApplySetting(string key, Dictionary<string, object> args)
@@ -302,7 +405,11 @@ class MainForm : Form
             s.LongPressMs = v;
             _rt.Ctrl.SetThreshold(v);
         }
-        else if (key == "randomJitter") s.RandomJitter = Bridge.GetBool(args, "value", s.RandomJitter);
+        else if (key == "randomJitter")
+        {
+            s.RandomJitter = Bridge.GetBool(args, "value", s.RandomJitter);
+            _rt.Ctrl.RandomJitter = s.RandomJitter;
+        }
         else if (key == "blockCtrl") s.BlockCtrl = Bridge.GetBool(args, "value", s.BlockCtrl);
         else if (key == "blockShift") s.BlockShift = Bridge.GetBool(args, "value", s.BlockShift);
         else if (key == "blockAlt") s.BlockAlt = Bridge.GetBool(args, "value", s.BlockAlt);
@@ -312,6 +419,305 @@ class MainForm : Form
         else if (key == "suppressHud") s.SuppressHud = Bridge.GetBool(args, "value", s.SuppressHud);
         else if (key == "suppressHotkeyToast") s.SuppressHotkeyToast = Bridge.GetBool(args, "value", s.SuppressHotkeyToast);
         else if (key == "headerAnim") s.HeaderAnim = Bridge.GetBool(args, "value", s.HeaderAnim);
+    }
+
+    // ---- 测试面板 ----
+    bool _testing;
+    Timer _testTimer;
+    int _lastVk = -1;
+
+    void StartTestTimer()
+    {
+        if (_testTimer == null)
+        {
+            _testTimer = new Timer();
+            _testTimer.Interval = 100;
+            _testTimer.Tick += delegate { PushTestStatus(); };
+        }
+        _testTimer.Start();
+        PushTestStatus();
+    }
+
+    void StopTestTimer()
+    {
+        if (_testTimer != null) _testTimer.Stop();
+        Send("testStatus", new Dictionary<string, object>
+        {
+            { "down", false }, { "keys", "" }, { "physical", "" }, { "target", "" }
+        });
+    }
+
+    void PushTestStatus()
+    {
+        if (!_testing) return;
+        bool down = (GetAsyncKeyState(0x02) & 0x8000) != 0;
+        var labels = new List<string>();
+        foreach (var kc in _rt.Settings.Keys)
+        {
+            if (!kc.Enabled) continue;
+            string mode = kc.Mode == KeyMode.Hold ? "保持" : kc.Mode == KeyMode.TapOnce ? "点按·单次" : "点按·连发";
+            if (_rt.Ctrl.IsTriggered) labels.Add(kc.Name + "（" + mode + "）");
+        }
+        string keysText = labels.Count == 0 ? "无" : string.Join("、", labels.ToArray());
+        if (_rt.Settings.RandomJitter && _rt.Ctrl.IsTriggered) keysText += "　本次延时 " + _rt.Ctrl.LastThresholdMs + "ms";
+        PollPhysicalKey();
+        string physical = _lastVk < 0 ? "无" : KeyNames.NameOf(_lastVk) + " (0x" + _lastVk.ToString("X2") + ")";
+        string target;
+        if (string.IsNullOrEmpty(_rt.Settings.TargetProcess)) target = "未选择（全局生效）";
+        else target = TargetForegroundActive() ? "已联动目标进程" : "请切换至目标进程窗口";
+        Send("testStatus", new Dictionary<string, object>
+        {
+            { "down", down }, { "keys", keysText }, { "physical", physical }, { "target", target }
+        });
+    }
+
+    // Task 8 接入键盘钩子前：只轮询当前已触发行的键位；仍未知时保持“无”，不伪造钩子
+    void PollPhysicalKey()
+    {
+        if (!_rt.Ctrl.IsTriggered) return;
+        foreach (var kc in _rt.Settings.Keys)
+        {
+            if (!kc.Enabled || kc.Vk <= 0) continue;
+            if ((GetAsyncKeyState(kc.Vk) & 0x8000) != 0) { _lastVk = kc.Vk; return; }
+        }
+    }
+
+    // Task 12 会替换为原生透明悬浮窗实现
+    void ShowEasterEgg() { }
+
+    // ---- 设置持久化（500ms 防抖，切方案/新建/删除/关窗同步落盘） ----
+    Timer _saveTimer;
+    bool _saveDirty;
+
+    void SaveSettings()
+    {
+        _saveDirty = true;
+        if (_saveTimer == null)
+        {
+            _saveTimer = new Timer();
+            _saveTimer.Interval = 500;
+            _saveTimer.Tick += delegate
+            {
+                _saveTimer.Stop();
+                if (_saveDirty) SaveSettingsNow();
+            };
+        }
+        _saveTimer.Stop();
+        _saveTimer.Start();
+        _rt.Ctrl.SetThreshold(_rt.Settings.LongPressMs);
+    }
+
+    void SaveSettingsNow()
+    {
+        if (_saveTimer != null) _saveTimer.Stop();
+        _saveDirty = false;
+        string path = ConfigStore.ProfilePath(_rt.Settings, _rt.ExeDir);
+        try { ConfigStore.SaveProfile(_rt.Settings, path); }
+        catch
+        {
+            ShowToast("无法保存配置文件：" + path, "err", 2500);
+        }
+        try { ConfigStore.SavePointer(_rt.Settings, System.IO.Path.Combine(_rt.ExeDir, "config.ini")); } catch { }
+        _rt.Ctrl.SetThreshold(_rt.Settings.LongPressMs);
+    }
+
+    // ---- 配置方案 ----
+    void SwitchProfile(string name)
+    {
+        SaveSettingsNow();
+        LoadProfileInto(name);
+    }
+
+    void LoadProfileInto(string name)
+    {
+        if (_saveTimer != null) _saveTimer.Stop();   // 丢弃挂起的防抖写
+        _saveDirty = false;
+        var s = _rt.Settings;
+        s.Profile = name;
+        AppSettings loaded = ConfigStore.LoadProfile(
+            System.IO.Path.Combine(ProfileDir(), name + ".ini"));
+        s.LongPressMs = loaded.LongPressMs;
+        s.Enabled = loaded.Enabled;
+        s.TargetProcess = loaded.TargetProcess;
+        s.BlockCtrl = loaded.BlockCtrl;
+        s.BlockShift = loaded.BlockShift;
+        s.BlockAlt = loaded.BlockAlt;
+        s.BlockWin = loaded.BlockWin;
+        s.EggBoost = loaded.EggBoost;
+        s.RandomJitter = loaded.RandomJitter;
+        s.SuppressToast = loaded.SuppressToast;
+        s.SuppressEgg = loaded.SuppressEgg;
+        s.SuppressHud = loaded.SuppressHud;
+        s.SuppressHotkeyToast = loaded.SuppressHotkeyToast;
+        s.HeaderAnim = loaded.HeaderAnim;
+        s.HotkeyMods = loaded.HotkeyMods;
+        s.HotkeyVk = loaded.HotkeyVk;
+        // 控制器持有的是列表引用，必须原地替换内容，不能换掉 s.Keys 对象
+        s.Keys.Clear();
+        s.Keys.AddRange(loaded.Keys);
+        _rt.Ctrl.RandomJitter = s.RandomJitter;
+        _rt.Ctrl.SetThreshold(s.LongPressMs);
+        _lastInTargetInit = false;
+        try { ConfigStore.SavePointer(s, System.IO.Path.Combine(_rt.ExeDir, "config.ini")); } catch { }
+        ApplyLinkageGate();
+        PushState();
+    }
+
+    void NewProfile(string raw)
+    {
+        string name = SanitizeProfileName(raw);
+        if (name.Length == 0)
+        {
+            ShowToast("方案名称不能为空", "err", 1800);
+            return;
+        }
+        var existing = ConfigStore.ListProfiles(ProfileDir());
+        foreach (string n in existing)
+        {
+            if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase))
+            {
+                ShowToast("已存在同名方案：" + name, "err", 1800);
+                return;
+            }
+        }
+        SaveSettingsNow();
+        string oldName = _rt.Settings.Profile;
+        _rt.Settings.Profile = name;
+        try
+        {
+            ConfigStore.SaveProfile(_rt.Settings, System.IO.Path.Combine(ProfileDir(), name + ".ini"));
+            ConfigStore.SavePointer(_rt.Settings, System.IO.Path.Combine(_rt.ExeDir, "config.ini"));
+        }
+        catch (Exception ex)
+        {
+            _rt.Settings.Profile = oldName;
+            ShowToast("无法创建方案：" + ex.Message, "err", 2500);
+            return;
+        }
+        PushState();
+    }
+
+    void DeleteProfile(string name)
+    {
+        var s = _rt.Settings;
+        List<string> list = ConfigStore.ListProfiles(ProfileDir());
+        if (list.Count <= 1)
+        {
+            ShowToast("至少需要保留一个配置方案", "err", 1800);
+            return;
+        }
+        if (string.IsNullOrEmpty(name) || !list.Contains(name)) name = s.Profile;
+        bool wasCurrent = string.Equals(name, s.Profile, StringComparison.OrdinalIgnoreCase);
+        ConfigStore.DeleteProfile(ProfileDir(), name);
+        list.RemoveAll(delegate(string n) { return string.Equals(n, name, StringComparison.OrdinalIgnoreCase); });
+        if (wasCurrent) LoadProfileInto(list.Count > 0 ? list[0] : AppSettings.DefaultProfileName);
+        else PushState();
+    }
+
+    static string SanitizeProfileName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "";
+        char[] bad = System.IO.Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder();
+        foreach (char c in name) if (Array.IndexOf(bad, c) < 0) sb.Append(c);
+        string t = sb.ToString().Trim();
+        if (t.Length > 20) t = t.Substring(0, 20);
+        return t;
+    }
+
+    void PopulateProfileComboIfNeeded()
+    {
+        // 切换配置目录后，若当前方案在新目录不存在则落盘一份
+        string p = System.IO.Path.Combine(ProfileDir(), _rt.Settings.Profile + ".ini");
+        if (!System.IO.File.Exists(p))
+        {
+            try { ConfigStore.SaveProfile(_rt.Settings, p); } catch { }
+        }
+    }
+
+    // ---- 前台进程门控 ----
+    bool _linkageActive;
+    bool _lastInTarget;
+    bool _lastInTargetInit;
+    readonly Random _rng = new Random();
+
+    IntPtr _lastFgHwnd = IntPtr.Zero;
+    string _cacheTarget = "";
+    bool _cachedInTarget;
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    // 缓存“前台窗口句柄 → 是否目标”的结果，只有前台窗口真正切换时才查进程
+    bool TargetForegroundActive()
+    {
+        if (string.IsNullOrEmpty(_rt.Settings.TargetProcess)) return true;
+        if (!string.Equals(_cacheTarget, _rt.Settings.TargetProcess, StringComparison.OrdinalIgnoreCase))
+        {
+            _cacheTarget = _rt.Settings.TargetProcess;
+            _lastFgHwnd = IntPtr.Zero;
+        }
+        IntPtr h = GetForegroundWindow();
+        if (h == IntPtr.Zero) return false;
+        if (h == _lastFgHwnd) return _cachedInTarget;
+        _lastFgHwnd = h;
+        uint pid;
+        GetWindowThreadProcessId(h, out pid);
+        try
+        {
+            using (System.Diagnostics.Process p = System.Diagnostics.Process.GetProcessById((int)pid))
+                _cachedInTarget = string.Equals(p.ProcessName, _rt.Settings.TargetProcess,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch { _cachedInTarget = false; }
+        return _cachedInTarget;
+    }
+
+    void ApplyLinkageGate()
+    {
+        var s = _rt.Settings;
+        bool inTarget = TargetForegroundActive();
+        bool active = s.Enabled && inTarget;
+        if (active != _linkageActive)
+        {
+            _linkageActive = active;
+            _rt.Ctrl.SetEnabled(active);
+        }
+        if (s.Enabled && !string.IsNullOrEmpty(s.TargetProcess))
+        {
+            if (_lastInTargetInit && inTarget != _lastInTarget)
+            {
+                if (inTarget)
+                {
+                    // 彩蛋：默认 1/20；EggBoost 时 3/5（SuppressEgg 时只出普通提示）
+                    if (!s.SuppressEgg)
+                    {
+                        int odds = s.EggBoost ? 5 : 20;
+                        if (_rng.Next(odds) < (s.EggBoost ? 3 : 1))
+                        {
+                            ShowEasterEgg();
+                            _lastInTarget = inTarget;
+                            _lastInTargetInit = true;
+                            return;
+                        }
+                    }
+                    if (!s.SuppressToast) ShowToast("✅ 已切换至目标进程，配置生效", "ok", 1500);
+                }
+                else if (!s.SuppressToast)
+                {
+                    ShowToast("❌ 已切换至其他进程，配置失效", "err", 1500);
+                }
+            }
+            _lastInTarget = inTarget;
+            _lastInTargetInit = true;
+        }
+        else
+        {
+            _lastInTarget = false;
+            _lastInTargetInit = false;
+        }
     }
 
     // ---- 无边框：缩放 + 拖动 ----
@@ -376,10 +782,22 @@ class MainForm : Form
         catch { }
     }
 
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        // 防抖静默期内关窗不丢数据
+        SaveSettingsNow();
+        base.OnFormClosing(e);
+    }
+
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _tick.Stop();
         _tick.Dispose();
+        if (_gateTimer != null) { _gateTimer.Stop(); _gateTimer.Dispose(); }
+        if (_testTimer != null) { _testTimer.Stop(); _testTimer.Dispose(); }
+        if (_saveTimer != null) { _saveTimer.Stop(); _saveTimer.Dispose(); }
+        if (_skeleton != null) _skeleton.Visible = false;
+        if (_skeletonLogo != null) { _skeletonLogo.Dispose(); _skeletonLogo = null; }
         base.OnFormClosed(e);
     }
 }
