@@ -1736,7 +1736,9 @@ static class Bridge
         d["headerAnim"] = s.HeaderAnim;
         d["theme"] = s.Theme;
         d["hotkey"] = HotkeyManager.Describe(s.HotkeyMods, s.HotkeyVk);
-        d["autostart"] = Autostart.IsEnabled();
+        // 绝不在这里调用 Autostart.IsEnabled()：它会同步启动 schtasks 子进程，
+        // 而 PushState 每次交互都要跑 -> UI 线程卡顿。用后台刷新的缓存值。
+        d["autostart"] = _autostartCached;
         d["eggBoost"] = s.EggBoost;
         var arr = new List<object>();
         for (int i = 0; i < s.Keys.Count; i++)
