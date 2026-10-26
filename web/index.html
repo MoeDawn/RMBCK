@@ -3,11 +3,49 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RMBCK</title>
+<title>右键长按联动器</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div id="boot">正在加载界面…</div>
+<div class="frame">
+  <aside class="sidebar">
+    <div class="brand" id="brand">
+      <img id="brandIcon" src="assets/icon.png" alt="">
+      <div class="brandText">
+        <b>RMBCK</b>
+        <span id="brandVer">v2.0.0</span>
+      </div>
+    </div>
+    <nav id="nav">
+      <button class="navBtn active" data-page="overview"><i>◈</i>概览</button>
+      <button class="navBtn" data-page="keys"><i>⌨</i>按键</button>
+      <button class="navBtn" data-page="process"><i>◉</i>进程</button>
+      <button class="navBtn" data-page="history"><i>≡</i>日志</button>
+      <button class="navBtn" data-page="settings"><i>⚙</i>设置</button>
+    </nav>
+    <div class="sideFoot">
+      <span id="statusChip" class="chip off">已禁用</span>
+    </div>
+  </aside>
+
+  <main class="content">
+    <header class="titlebar" id="titlebar">
+      <div class="tbSpace"></div>
+      <button class="winBtn" id="btnTheme" title="切换主题">◐</button>
+      <button class="winBtn" id="btnMin" title="最小化到托盘">—</button>
+      <button class="winBtn close" id="btnClose" title="关闭">✕</button>
+    </header>
+
+    <section class="page active" id="page-overview"><div class="placeholder">（此页将在后续版本填充）</div></section>
+    <section class="page" id="page-keys"><div class="placeholder">（此页将在后续版本填充）</div></section>
+    <section class="page" id="page-process"><div class="placeholder">（此页将在后续版本填充）</div></section>
+    <section class="page" id="page-history"><div class="placeholder">（此页将在后续版本填充）</div></section>
+    <section class="page" id="page-settings"><div class="placeholder">（此页将在后续版本填充）</div></section>
+  </main>
+</div>
+
+<div class="modalWrap" id="modalWrap"></div>
+<div class="toasts" id="toasts"></div>
 <script src="app.js"></script>
 </body>
 </html>
