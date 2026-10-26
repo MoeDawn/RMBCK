@@ -729,20 +729,12 @@ class TriggerController
     {
         if (!_pressed || !_enabled) return;
 
-        bool anyHoldFired = false;
-        for (int i = 0; i < _config.Count; i++)
-            if (WasFired(i) && _config[i].Mode == KeyMode.Hold) anyHoldFired = true;
-
         if (!_triggered)
         {
             if (nowMs - _downTick < _armedThresholdMs) return;
             if (ModifierHeld != null && ModifierHeld()) { _modifierCancelled = true; return; }
             if (_modifierCancelled) return;
             _triggered = true;
-        }
-        else if (!anyHoldFired && !AnyRowPending(nowMs))
-        {
-            // 全部为点按类且已过延迟窗口，保持 _triggered 以便连发
         }
 
         for (int i = 0; i < _config.Count; i++)
@@ -767,13 +759,6 @@ class TriggerController
                 _lastTap[i] = nowMs;
             }
         }
-    }
-
-    bool AnyRowPending(long nowMs)
-    {
-        for (int i = 0; i < _config.Count; i++)
-            if (_config[i].Enabled && !WasFired(i)) return true;
-        return false;
     }
 }
 ```
