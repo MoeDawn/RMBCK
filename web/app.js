@@ -104,6 +104,121 @@
     return b;
   };
 
+  // ---------- 按键页 ----------
+  var MOD_LABEL = { 1: "Ctrl", 2: "Shift", 4: "Alt", 8: "Win" };
+  var MODE_LABEL = { Hold: "保持", TapOnce: "点按·单次", TapRepeat: "点按·连发" };
+
+  function isCapturingRow(index) {
+    var c = window.__capturing;
+    if (c) return !!(c.active && c.target === "row" && c.index === index);
+    return window.__captureRow === index;
+  }
+
+  function describeKey(k) {
+    var mods = [];
+    [1, 2, 4, 8].forEach(function (bit) { if (k.mods & bit) mods.push(MOD_LABEL[bit]); });
+    var name = k.name || "（未设置）";
+    return (mods.length ? mods.join("+") + "+" : "") + name;
+  }
+
+  function keyHeader() {
+    var h = el("div", "keyRow keyHead");
+    ["启用", "键位", "模式", "延迟ms", "连发ms"].forEach(function (t) { h.appendChild(el("span", null, t)); });
+    h.appendChild(el("span", null, ""));
+    return h;
+  }
+
+  function keyRow(k) {
+    var r = el("div", "keyRow");
+
+    r.appendChild(window.__switch(k.enabled, function (v) {
+      send("setKey", { index: k.index, field: "enabled", value: v });
+    }));
+
+    var cell = el("div", "keyName");
+    if (isCapturingRow(k.index)) {
+      cell.appendChild(el("span", "capturing", "请按下组合键…"));
+    } else {
+      var b = el("button", "keyBtn", describeKey(k));
+      b.onclick = function () { send("captureKey", { target: "row", index: k.index }); };
+      cell.appendChild(b);
+    }
+    r.appendChild(cell);
+
+    var sel = el("select");
+    ["Hold", "TapOnce", "TapRepeat"].forEach(function (m) {
+      var o = el("option", null, MODE_LABEL[m]);
+      o.value = m;
+      if (m === k.mode) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.onchange = function () { send("setKey", { index: k.index, field: "mode", value: sel.value }); };
+    r.appendChild(sel);
+
+    var delay = el("input");
+    delay.type = "number";
+    delay.min = "0";
+    delay.max = "2000";
+    delay.value = k.delay;
+    delay.disabled = k.mode === "Hold";
+    delay.onchange = function () {
+      var v = parseInt(delay.value, 10);
+      if (isNaN(v)) v = 0;
+      send("setKey", { index: k.index, field: "delay", value: v });
+    };
+    r.appendChild(delay);
+
+    var rep = el("input");
+    rep.type = "number";
+    rep.min = "10";
+    rep.max = "2000";
+    rep.value = k.repeat;
+    rep.disabled = k.mode !== "TapRepeat";
+    rep.onchange = function () {
+      var v = parseInt(rep.value, 10);
+      if (isNaN(v)) v = 100;
+      send("setKey", { index: k.index, field: "repeat", value: v });
+    };
+    r.appendChild(rep);
+
+    var del = el("button", "iconBtn", "✕");
+    del.title = "删除此行";
+    del.onclick = function () { send("removeKey", { index: k.index }); };
+    r.appendChild(del);
+    return r;
+  }
+
+  window.render_keys = function (s) {
+    var p = document.getElementById("page-keys");
+    if (!p) return;
+    p.innerHTML = "";
+
+    var conflicts = s.conflicts || [];
+    if (conflicts.length) {
+      var warn = el("div", "card warnCard");
+      warn.appendChild(el("h3", null, "⚠ 检测到重复键位"));
+      var names = conflicts.map(function (c) {
+        return "第 " + (c.a + 1) + " 行与第 " + (c.b + 1) + " 行";
+      });
+      warn.appendChild(el("div", "muted", names.join("；") + "键位相同，可能重复触发。"));
+      p.appendChild(warn);
+    }
+
+    var card = el("div", "card");
+    card.appendChild(el("h3", null, "按键列表"));
+    var list = el("div", "keyList");
+    list.appendChild(keyHeader());
+    var keys = s.keys || [];
+    keys.forEach(function (k) { list.appendChild(keyRow(k)); });
+    if (!keys.length) list.appendChild(el("div", "muted empty", "还没有按键，点下方「添加按键」"));
+    card.appendChild(list);
+
+    var add = el("button", "btn addKey", "＋ 添加按键");
+    add.onclick = function () { send("addKey", {}); };
+    card.appendChild(add);
+    p.appendChild(card);
+  };
+
   // ---------- 概览页 ----------
   window.render_overview = function (s) {
     var p = document.getElementById("page-overview");
@@ -339,7 +454,7 @@
       }
       else if (msg.type === "capturing") {
         window.__capturing = data;
-        window.__captureRow = data && data.target === "row" ? data.index : null;
+        window.__captureRow = data && data.active && data.target === "row" ? data.index : null;
         if (data && data.target === "hotkey") window.__captureHotkey = false;
         if (page === "keys" || page === "settings") render();
       }

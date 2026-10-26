@@ -57,12 +57,13 @@ class MouseHook : IDisposable
 class KeyboardHook : IDisposable
 {
     public event Action<int> KeyDown;
+    public event Action<int> KeyUp;
 
     delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     const int WH_KEYBOARD_LL = 13;
-    const int WM_KEYDOWN = 0x0100;
-    const int WM_SYSKEYDOWN = 0x0104;
+    const int WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
+    const int WM_SYSKEYDOWN = 0x0104, WM_SYSKEYUP = 0x0105;
 
     IntPtr _hookId = IntPtr.Zero;
     LowLevelKeyboardProc _proc;
@@ -102,10 +103,11 @@ class KeyboardHook : IDisposable
             if (nCode >= 0)
             {
                 int msg = (int)wParam;
-                if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+                if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP)
                 {
                     KBDLLHOOKSTRUCT s = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
-                    var h = KeyDown;
+                    bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+                    var h = down ? KeyDown : KeyUp;
                     if (h != null) h((int)s.vkCode);
                 }
             }

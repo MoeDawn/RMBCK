@@ -16,6 +16,8 @@ class MainForm : Form
     bool _pageReady;
     bool _autostartCached;
     volatile bool _autostartRefreshing;
+    bool _kbInstallFailed;
+    bool _kbFailureShown;
 
     // 启动骨架：WebView2 首次启动约 5s，窗口立即显示原生占位内容
     Panel _skeleton;
@@ -44,6 +46,12 @@ class MainForm : Form
         _rt.Hook.RightButtonDown += delegate { _rt.Ctrl.OnRightDown(Environment.TickCount); };
         _rt.Hook.RightButtonUp += delegate { _rt.Ctrl.OnRightUp(); };
         _rt.Ctrl.ModifierHeld = ModifierBlocked;
+
+        // 键盘钩子：按键页捕获 + 概览测试面板“实际按下”
+        _rt.KbHook = new KeyboardHook();
+        _rt.KbHook.KeyDown += delegate(int vk) { HandleCapturedKey(vk, true); };
+        _rt.KbHook.KeyUp += delegate(int vk) { HandleCapturedKey(vk, false); };
+        if (!_rt.KbHook.Install()) _kbInstallFailed = true;
         _tick = new Timer();
         _tick.Interval = 10;
         _tick.Tick += delegate { OnTickHandler(); };
@@ -274,6 +282,11 @@ class MainForm : Form
             d["conflicts"] = FindConflicts();
             d["keyNames"] = KeyNames.CommonKeys;
             Send("state", d);
+            if (_kbInstallFailed && !_kbFailureShown)
+            {
+                _kbFailureShown = true;
+                ShowToast("键盘钩子安装失败，组合键捕获不可用", "err", 2500);
+            }
         }
         catch { }
     }
@@ -396,6 +409,88 @@ class MainForm : Form
         if (a == "deleteProfile") { DeleteProfile(Bridge.GetStr(m.Args, "name", "")); return; }
         if (a == "startTest") { _testing = true; StartTestTimer(); return; }
         if (a == "stopTest") { _testing = false; StopTestTimer(); return; }
+
+        // ---- 按键页动作 ----
+        if (a == "addKey")
+        {
+            // 控制器持有列表引用：必须原地 Add，绝不能给 s.Keys 换新实例
+            s.Keys.Add(new KeyConfig
+            {
+                Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold, RepeatIntervalMs = 100
+            });
+            SaveSettings();
+            PushState();
+            return;
+        }
+        if (a == "removeKey")
+        {
+            int i = Bridge.GetInt(m.Args, "index", -1);
+            if (i >= 0 && i < s.Keys.Count)
+            {
+                // 删除会移动行索引，进行中的捕获目标可能错位，直接取消
+                if (_capturing) EndCapture();
+                s.Keys.RemoveAt(i);
+                SaveSettings();
+                PushState();
+            }
+            return;
+        }
+        if (a == "setKey")
+        {
+            int i = Bridge.GetInt(m.Args, "index", -1);
+            if (i < 0 || i >= s.Keys.Count) return;
+            var kc = s.Keys[i];
+            string field = Bridge.GetStr(m.Args, "field", "");
+            if (field == "enabled")
+            {
+                kc.Enabled = Bridge.GetBool(m.Args, "value", kc.Enabled);
+            }
+            else if (field == "mode")
+            {
+                string mode = Bridge.GetStr(m.Args, "value", "Hold");
+                kc.Mode = mode == "TapOnce" ? KeyMode.TapOnce
+                    : mode == "TapRepeat" ? KeyMode.TapRepeat : KeyMode.Hold;
+            }
+            else if (field == "delay")
+            {
+                kc.DelayMs = Math.Max(0, Math.Min(2000, Bridge.GetInt(m.Args, "value", kc.DelayMs)));
+            }
+            else if (field == "repeat")
+            {
+                kc.RepeatIntervalMs = Math.Max(10, Math.Min(2000, Bridge.GetInt(m.Args, "value", kc.RepeatIntervalMs)));
+            }
+            else if (field == "mods")
+            {
+                // 前端使用 1=Ctrl 2=Shift 4=Alt 8=Win，与 Win32 MOD_* 不同
+                kc.Mods = Bridge.GetInt(m.Args, "value", kc.Mods) & 0x0F;
+            }
+            else if (field == "name")
+            {
+                string name = Bridge.GetStr(m.Args, "value", "");
+                int vk;
+                try { vk = KeyNames.Resolve(name); }
+                catch
+                {
+                    ShowToast("无法识别的键位：" + name, "err", 1800);
+                    PushState();   // 让前端回到真实状态，不静默禁用该行
+                    return;
+                }
+                kc.Vk = vk;
+                kc.Name = KeyNames.NameOf(vk);
+            }
+            else
+            {
+                return;
+            }
+            SaveSettings();
+            PushState();
+            return;
+        }
+        if (a == "captureKey")
+        {
+            BeginCapture(Bridge.GetStr(m.Args, "target", ""), Bridge.GetInt(m.Args, "index", -1));
+            return;
+        }
     }
 
     void ApplySetting(string key, Dictionary<string, object> args)
@@ -423,6 +518,120 @@ class MainForm : Form
         else if (key == "headerAnim") s.HeaderAnim = Bridge.GetBool(args, "value", s.HeaderAnim);
     }
 
+    // ---- 按键捕获 ----
+    // 组合键捕获不能在第一下非修饰键按下时立刻提交：
+    // 用户可能还在补按其它修饰键（Ctrl+Alt+K 不能先被 Ctrl+K 截胡）。
+    // 因此有修饰键时等主键松开再提交，无修饰键的普通键立即提交。
+    bool _capturing;
+    string _captureTarget = "";
+    int _captureIndex = -1;
+    int _captureVk = -1;
+    uint _captureMods;
+    readonly HashSet<int> _keysDown = new HashSet<int>();
+
+    void BeginCapture(string target, int index)
+    {
+        if (target != "row")
+        {
+            // 热键捕获属于设置页（后续任务）
+            ShowToast("该功能将在后续版本启用", "info", 1200);
+            return;
+        }
+        if (index < 0 || index >= _rt.Settings.Keys.Count) return;
+        if (_rt.KbHook == null || _kbInstallFailed)
+        {
+            ShowToast("键盘钩子不可用，无法捕获按键", "err", 1800);
+            return;
+        }
+        if (_capturing) EndCapture();
+        _capturing = true;
+        _captureTarget = target;
+        _captureIndex = index;
+        _captureVk = -1;
+        _captureMods = 0;
+        _keysDown.Clear();
+        Send("capturing", new Dictionary<string, object>
+        {
+            { "active", true }, { "target", target }, { "index", index }
+        });
+    }
+
+    void EndCapture()
+    {
+        if (!_capturing) return;
+        _capturing = false;
+        _captureVk = -1;
+        _captureMods = 0;
+        _keysDown.Clear();
+        Send("capturing", new Dictionary<string, object>
+        {
+            { "active", false }, { "target", _captureTarget }, { "index", _captureIndex }
+        });
+    }
+
+    // 由 KeyboardHook 调用（UI 线程）。必须自行维护按下集合：
+    // 1) 过滤按住不放产生的自动重复
+    // 2) 等到主键松开才提交，给用户补按其它修饰键的机会
+    void HandleCapturedKey(int vk, bool down)
+    {
+        if (!_capturing)
+        {
+            if (down) _lastVk = vk;   // 概览测试面板的“实际按下”
+            return;
+        }
+
+        if (down)
+        {
+            if (vk == 0x1B) { EndCapture(); return; }   // Esc 取消，不修改任何行
+            if (_keysDown.Contains(vk)) return;         // 自动重复
+            _keysDown.Add(vk);
+            if (IsModifierVk(vk)) return;               // 继续收集修饰键
+            if (_captureVk == vk) return;
+            _captureVk = vk;
+            _captureMods = ComputeModsFromSet(_keysDown);
+            if (_captureMods == 0) CommitCapture();     // 普通键：立即生效
+            return;
+        }
+
+        _keysDown.Remove(vk);
+        if (vk == _captureVk && _captureVk >= 0) CommitCapture();
+    }
+
+    uint ComputeModsFromSet(HashSet<int> down)
+    {
+        uint mods = 0;
+        if (down.Contains(0x11) || down.Contains(0xA2) || down.Contains(0xA3)) mods |= 1;   // Ctrl
+        if (down.Contains(0x10) || down.Contains(0xA0) || down.Contains(0xA1)) mods |= 2;   // Shift
+        if (down.Contains(0x12) || down.Contains(0xA4) || down.Contains(0xA5)) mods |= 4;   // Alt
+        if (down.Contains(0x5B) || down.Contains(0x5C)) mods |= 8;                          // Win
+        return mods;
+    }
+
+    static bool IsModifierVk(int vk)
+    {
+        return vk == 0x11 || vk == 0x10 || vk == 0x12 || vk == 0x5B || vk == 0x5C
+            || vk == 0xA0 || vk == 0xA1 || vk == 0xA2 || vk == 0xA3 || vk == 0xA4 || vk == 0xA5;
+    }
+
+    void CommitCapture()
+    {
+        int vk = _captureVk;
+        uint mods = _captureMods;
+        if (vk < 0) { EndCapture(); return; }
+
+        int i = _captureIndex;
+        if (i < 0 || i >= _rt.Settings.Keys.Count) { EndCapture(); return; }
+        string name;
+        try { name = KeyNames.NameOf(vk); } catch { name = "VK_" + vk.ToString("X"); }
+        var kc = _rt.Settings.Keys[i];
+        kc.Name = name;
+        kc.Vk = vk;
+        kc.Mods = (int)mods;
+        SaveSettings();
+        EndCapture();
+        PushState();
+    }
+
     // ---- 测试面板 ----
     bool _testing;
     Timer _testTimer;
@@ -430,6 +639,7 @@ class MainForm : Form
 
     void StartTestTimer()
     {
+        _lastVk = -1;   // 新一轮测试从“无”开始，避免显示上一次的按键
         if (_testTimer == null)
         {
             _testTimer = new Timer();
@@ -465,7 +675,6 @@ class MainForm : Form
         }
         string keysText = labels.Count == 0 ? "无" : string.Join("、", labels.ToArray());
         if (_rt.Settings.RandomJitter && _rt.Ctrl.IsTriggered) keysText += "　本次延时 " + _rt.Ctrl.LastThresholdMs + "ms";
-        PollPhysicalKey();
         string physical = _lastVk < 0 ? "无" : KeyNames.NameOf(_lastVk) + " (0x" + _lastVk.ToString("X2") + ")";
         string target;
         if (string.IsNullOrEmpty(_rt.Settings.TargetProcess)) target = "未选择（全局生效）";
@@ -474,17 +683,6 @@ class MainForm : Form
         {
             { "down", down }, { "keys", keysText }, { "physical", physical }, { "target", target }
         });
-    }
-
-    // Task 8 接入键盘钩子前：只轮询当前已触发行的键位；仍未知时保持“无”，不伪造钩子
-    void PollPhysicalKey()
-    {
-        if (!_rt.Ctrl.IsTriggered) return;
-        foreach (var kc in _rt.Settings.Keys)
-        {
-            if (!kc.Enabled || kc.Vk <= 0) continue;
-            if ((GetAsyncKeyState(kc.Vk) & 0x8000) != 0) { _lastVk = kc.Vk; return; }
-        }
     }
 
     // Task 12 会替换为原生透明悬浮窗实现
@@ -535,6 +733,7 @@ class MainForm : Form
 
     void LoadProfileInto(string name)
     {
+        if (_capturing) EndCapture();   // 换方案会重排按键行，捕获目标已失效
         if (_saveTimer != null) _saveTimer.Stop();   // 丢弃挂起的防抖写
         _saveDirty = false;
         var s = _rt.Settings;
@@ -822,6 +1021,7 @@ class MainForm : Form
         if (_gateTimer != null) { _gateTimer.Stop(); _gateTimer.Dispose(); }
         if (_testTimer != null) { _testTimer.Stop(); _testTimer.Dispose(); }
         if (_saveTimer != null) { _saveTimer.Stop(); _saveTimer.Dispose(); }
+        if (_rt.KbHook != null) { _rt.KbHook.Dispose(); _rt.KbHook = null; }
         if (_skeleton != null) _skeleton.Visible = false;
         if (_skeletonLogo != null) { _skeletonLogo.Dispose(); _skeletonLogo = null; }
         base.OnFormClosed(e);

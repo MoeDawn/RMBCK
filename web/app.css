@@ -154,3 +154,32 @@ input[type=text], input[type=number], select {
 .testLines { display: flex; flex-direction: column; gap: 4px; margin-top: 12px;
   padding-top: 10px; border-top: 1px solid var(--line); }
 .testLines .muted { transition: color .16s ease; }
+
+/* ---------- 按键页 ---------- */
+.keyList { display: flex; flex-direction: column; gap: 8px; }
+.keyRow { display: grid; grid-template-columns: 56px 1fr 116px 88px 88px 36px;
+  align-items: center; gap: 10px; }
+.keyHead { color: var(--textSub); font-size: 11px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--line); }
+.keyRow:not(.keyHead) { padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--card); }
+.keyName { min-width: 0; }
+.keyName .keyBtn { width: 100%; text-align: left; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--cardHi); color: var(--text);
+  font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keyName .keyBtn:hover { border-color: var(--accent); }
+.capturing { display: inline-block; padding: 7px 10px; color: var(--accent);
+  animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.keyRow select, .keyRow input[type=number] { width: 100%; }
+.keyRow input:disabled { opacity: .45; cursor: not-allowed; }
+.iconBtn { width: 30px; height: 28px; border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--textSub); }
+.iconBtn:hover { color: var(--err); border-color: var(--err); }
+.warnCard { border-color: var(--warn); }
+.warnCard h3 { color: var(--warn); }
+.addKey { margin-top: 12px; }
+.keyList .empty { padding: 10px 2px; }
+#page-keys input:focus-visible, #page-keys select:focus-visible {
+  outline: 2px solid var(--sel); outline-offset: 1px; border-color: var(--accent2);
+}
