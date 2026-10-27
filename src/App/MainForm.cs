@@ -1636,20 +1636,15 @@ class MainForm : Form
 
     public void MinimizeToTray()
     {
+        // 任何最小化路径都先撤销捕获，键盘钩子不能把确认/关闭操作写进键位
+        CancelCapture();
         if (_tray == null)
         {
-            // 没有托盘图标时隐藏窗口将无法恢复，直接走真实退出
-            try
-            {
-                MessageBox.Show("托盘图标不可用，程序将退出。", "右键长按联动器",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-            catch { }
+            // 没有托盘图标时隐藏窗口将无法恢复；非阻塞提示后直接退出
+            ShowToast("托盘图标不可用，程序将退出", "err", 1600);
             DoExit();
             return;
         }
-        // 离开界面前撤销进行中的捕获
-        CancelCapture();
         try
         {
             ShowInTaskbar = false;
