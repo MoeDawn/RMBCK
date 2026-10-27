@@ -1,0 +1,24 @@
+# Build artifacts
+*.exe
+tests.exe
+
+# WebView2 SDK DLLs copied to repo root by build.bat（正式副本在 lib/，保持跟踪）
+/Microsoft.Web.WebView2.Core.dll
+/Microsoft.Web.WebView2.WinForms.dll
+/WebView2Loader.dll
+
+# Runtime config（config.ini 指针文件 + 各配置方案 <方案名>.ini）
+/*.ini
+
+# SDD workspace (per-plan scratch; see .superpowers/sdd/)
+.superpowers/
+
+# Misc
+*.user
+
+# 本地文件不入库：说明文档（README 除外）、.gitignore 自身、测试文件
+/*.md
+!README.md
+/.gitignore
+/test.bat
+/tests.cs
