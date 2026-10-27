@@ -1239,10 +1239,197 @@ class MainForm : Form
         return d;
     }
 
-    // Task 14 接入完整的报错反馈流程（原 v1 的 FeedbackForm + err.jpg）
+    // Task 14: v1 报错反馈流程 —— 两条提示后全屏显示 err.jpg（占卜彩蛋）
     void StartFeedbackFlow()
     {
-        ShowToast("报错反馈功能将在后续版本启用", "info", 1600);
+        if (IsDisposed || Disposing) return;
+
+        // 悬浮窗冷启动约 2s：第一条 toast 会先排队。必须等它真正投递后再计时，
+        // 否则第二条 toast 到达时会按“最新内容优先”丢掉第一条，用户看不到 v1 的完整提示。
+        if (_rt.Settings.SuppressToast || _rt.WebEnv == null)
+        {
+            ShowFeedbackToastThenSchedule();
+            return;
+        }
+        OverlayForm w = ToastWindow(false);
+        if (w == null)
+        {
+            ShowFeedbackToastThenSchedule();
+            return;
+        }
+        ShowToast("正在提交报错反馈...", "info", 1500);
+        if (w.IsReady)
+        {
+            ScheduleFeedbackToast2();
+            return;
+        }
+        Timer wait = new Timer();
+        wait.Interval = 50;
+        int waited = 0;
+        wait.Tick += delegate
+        {
+            waited += 50;
+            bool ready;
+            try { ready = w.IsReady || w.IsDisposed; } catch { ready = true; }
+            // 悬浮窗导航失败时不能永久等待：6s 后照常继续后续流程
+            if (!ready && waited < 6000) return;
+            wait.Stop();
+            wait.Dispose();
+            if (IsDisposed || Disposing) return;
+            ScheduleFeedbackToast2();
+        };
+        wait.Start();
+    }
+
+    void ShowFeedbackToastThenSchedule()
+    {
+        ShowToast("正在提交报错反馈...", "info", 1500);
+        ScheduleFeedbackToast2();
+    }
+
+    void ScheduleFeedbackToast2()
+    {
+        if (IsDisposed || Disposing) return;
+        Timer t1 = new Timer();
+        t1.Interval = 1500;
+        t1.Tick += delegate
+        {
+            t1.Stop();
+            t1.Dispose();
+            if (IsDisposed || Disposing) return;
+            ShowToast("正在占卜...", "info", 2000);
+            Timer t2 = new Timer();
+            t2.Interval = 2000;
+            t2.Tick += delegate
+            {
+                t2.Stop();
+                t2.Dispose();
+                if (IsDisposed || Disposing) return;
+                OpenErrorImage();
+            };
+            t2.Start();
+        };
+        t1.Start();
+    }
+
+    // 全屏 err.jpg 查看器：复用进程唯一的 WebView2 环境（绝不新建环境）
+    void OpenErrorImage()
+    {
+        if (IsDisposed || Disposing) return;
+        if (_rt == null || _rt.WebEnv == null)
+        {
+            ShowToast("界面环境未就绪，无法显示报错图片", "err", 2200);
+            return;
+        }
+        string errPath = null;
+        try
+        {
+            if (!string.IsNullOrEmpty(_rt.WebDir))
+                errPath = Path.Combine(_rt.WebDir, "assets", "err.jpg");
+            if (errPath == null || !File.Exists(errPath))
+            {
+                ShowToast("缺少报错图片 err.jpg", "err", 2200);
+                return;
+            }
+        }
+        catch
+        {
+            ShowToast("无法读取报错图片 err.jpg", "err", 2200);
+            return;
+        }
+
+        Form viewer = null;
+        try
+        {
+            viewer = new Form();
+            viewer.Text = "报错反馈";
+            viewer.FormBorderStyle = FormBorderStyle.None;
+            viewer.StartPosition = FormStartPosition.Manual;
+            viewer.Bounds = Screen.PrimaryScreen.Bounds;   // 全屏（含任务栏区域）
+            viewer.BackColor = Color.Black;
+            viewer.ShowInTaskbar = false;
+            viewer.KeyPreview = true;
+
+            WebView2 wv = new WebView2();
+            wv.Dock = DockStyle.Fill;
+            wv.DefaultBackgroundColor = Color.Black;
+            viewer.Controls.Add(wv);
+
+            Form owner = viewer;
+            viewer.Load += delegate { InitViewerAsync(owner, wv); };
+            viewer.Shown += delegate { try { wv.Focus(); } catch { } };
+            viewer.KeyDown += delegate(object s2, KeyEventArgs e2)
+            {
+                if (e2.KeyCode == Keys.Escape) CloseViewer(owner);
+            };
+            viewer.ShowDialog(this);
+            viewer.Dispose();
+            viewer = null;
+        }
+        catch
+        {
+            if (viewer != null) { try { viewer.Dispose(); } catch { } }
+            ShowToast("无法显示报错图片", "err", 2200);
+        }
+    }
+
+    async void InitViewerAsync(Form owner, WebView2 wv)
+    {
+        try
+        {
+            await wv.EnsureCoreWebView2Async(_rt.WebEnv);
+            if (owner.IsDisposed || wv.IsDisposed) return;
+            CoreWebView2 core = wv.CoreWebView2;
+            if (core == null)
+            {
+                CloseViewer(owner);
+                ShowToast("无法创建图片查看界面", "err", 2200);
+                return;
+            }
+            core.Settings.AreDevToolsEnabled = false;
+            core.Settings.AreDefaultContextMenusEnabled = false;
+            core.Settings.IsStatusBarEnabled = false;
+            core.NewWindowRequested += delegate(object s, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; };
+            // 映射是每个 CoreWebView2 独立的：查看器必须自己注册
+            core.SetVirtualHostNameToFolderMapping("rmbck.local", _rt.WebDir, CoreWebView2HostResourceAccessKind.Allow);
+            core.WebMessageReceived += delegate(object s, CoreWebView2WebMessageReceivedEventArgs e)
+            {
+                try
+                {
+                    string json = null;
+                    try { json = e.WebMessageAsJson; } catch { }
+                    if (json == null) { try { json = e.TryGetWebMessageAsString(); } catch { } }
+                    BridgeMessage m = Bridge.Parse(json);
+                    if (m != null && m.Action == "closeViewer") CloseViewer(owner);
+                }
+                catch { }
+            };
+            core.NavigationCompleted += delegate(object s, CoreWebView2NavigationCompletedEventArgs e)
+            {
+                if (!e.IsSuccess)
+                {
+                    CloseViewer(owner);
+                    ShowToast("无法加载报错图片", "err", 2200);
+                    return;
+                }
+                try { wv.Focus(); } catch { }
+            };
+            core.Navigate("https://rmbck.local/viewer.html?src=assets/err.jpg");
+        }
+        catch
+        {
+            CloseViewer(owner);
+            ShowToast("无法显示报错图片", "err", 2200);
+        }
+    }
+
+    void CloseViewer(Form viewer)
+    {
+        try
+        {
+            if (viewer != null && !viewer.IsDisposed) viewer.Close();
+        }
+        catch { }
     }
 
     // ---- 设置持久化（500ms 防抖，切方案/新建/删除/关窗同步落盘） ----

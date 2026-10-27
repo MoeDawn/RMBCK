@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>报错反馈</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  img {
+    display: block;
+    max-width: 100vw;
+    max-height: 100vh;
+    object-fit: contain;
+  }
+</style>
+</head>
+<body>
+<img id="im" src="assets/err.jpg" alt="">
+<script>
+(function () {
+  "use strict";
+  var im = document.getElementById("im");
+  var closed = false;
+
+  // 支持 ?src= 指定其它图片（默认 err.jpg）
+  try {
+    var src = new URLSearchParams(location.search).get("src");
+    if (src && src !== im.getAttribute("src")) im.src = src;
+  } catch (e) { }
+
+  function closeViewer() {
+    if (closed) return;
+    closed = true;
+    try {
+      if (window.chrome && window.chrome.webview)
+        window.chrome.webview.postMessage({ action: "closeViewer" });
+    } catch (e) { }
+  }
+
+  // 全屏任意位置点击 / Esc 关闭
+  document.addEventListener("click", closeViewer);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" || e.key === "Esc" || e.keyCode === 27) {
+      e.preventDefault();
+      closeViewer();
+    }
+  });
+  im.onerror = function () { im.alt = "图片加载失败"; };
+})();
+</script>
+</body>
+</html>

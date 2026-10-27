@@ -101,6 +101,61 @@
   }
   window.__showCloseModal = showCloseModal;
 
+  // 报错反馈：收集问题描述与分类后交给 C# 走 v1 的“提交→占卜→全屏图片”流程
+  function showFeedback() {
+    var w = $("modalWrap");
+    w.innerHTML = "";
+    var m = el("div", "modal");
+    m.setAttribute("role", "dialog");
+    m.setAttribute("aria-modal", "true");
+    m.setAttribute("aria-labelledby", "feedbackModalTitle");
+
+    var title = el("h4", null, "报错反馈");
+    title.id = "feedbackModalTitle";
+    m.appendChild(title);
+    m.appendChild(el("div", "muted", "描述你遇到的问题，我们会占卜一下（认真脸）。"));
+
+    var t = el("textarea");
+    t.placeholder = "问题描述…";
+    t.rows = 4;
+    t.style.width = "100%";
+    t.style.marginTop = "10px";
+    t.style.borderRadius = "8px";
+    t.style.border = "1px solid var(--line)";
+    t.style.background = "var(--cardHi)";
+    t.style.color = "var(--text)";
+    t.style.font = "inherit";
+    t.style.padding = "8px 10px";
+    t.style.resize = "vertical";
+    m.appendChild(t);
+
+    var type = el("select");
+    ["闪退", "按键无效", "界面异常", "其他"].forEach(function (v) {
+      var o = el("option", null, v);
+      o.value = v;
+      type.appendChild(o);
+    });
+    type.style.marginTop = "8px";
+    type.style.width = "100%";
+    m.appendChild(type);
+
+    var acts = el("div", "actions");
+    var bCancel = el("button", "btnGhost", "取消");
+    var bOk = el("button", "btn", "提交");
+    bCancel.onclick = function () { w.classList.remove("show"); };
+    bOk.onclick = function () {
+      w.classList.remove("show");
+      send("submitFeedback", { text: t.value, type: type.value });
+    };
+    acts.appendChild(bCancel);
+    acts.appendChild(bOk);
+    m.appendChild(acts);
+    w.appendChild(m);
+    w.classList.add("show");
+    t.focus();
+  }
+  window.__showFeedback = showFeedback;
+
   // 通用组件
   window.__switch = function (on, onChange) {
     var b = el("button", "sw " + (on ? "on" : ""));
@@ -656,7 +711,7 @@
     var r5 = el("div", "row");
     var fb = el("button", "btnGhost", "报错反馈");
     fb.type = "button";
-    fb.onclick = function () { send("submitFeedback", {}); };
+    fb.onclick = function () { showFeedback(); };
     var home = el("button", "btnGhost", "作者主页");
     home.type = "button";
     home.onclick = function () { send("openHomepage", {}); };

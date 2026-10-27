@@ -16,6 +16,7 @@ static class WebAssets
         { "RMBCK.web.overlay.html", "overlay.html" },
         { "RMBCK.web.overlay.css",  "overlay.css" },
         { "RMBCK.web.overlay.js",   "overlay.js" },
+        { "RMBCK.web.viewer.html",  "viewer.html" },
         { "RMBCK.web.assets.icon.png",    "assets/icon.png" },
         { "RMBCK.web.assets.iconf1.png",  "assets/iconf1.png" },
         { "RMBCK.web.assets.iconf2.png",  "assets/iconf2.png" },

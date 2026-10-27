@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 
 class TestRunner
 {
@@ -378,13 +379,36 @@ class TestRunner
     static void TestWebAssets()
     {
         Section("WebAssets 资源映射");
-        Assert(WebAssets.Map.Count >= 10, "资源映射至少 10 项");
+        Assert(WebAssets.Map.Count == 14, "资源映射恰为 14 项");
         Assert(WebAssets.Map.ContainsKey("RMBCK.web.index.html"), "含 index.html 映射");
         Assert(WebAssets.Map["RMBCK.web.index.html"] == "index.html", "index.html 相对路径正确");
         Assert(WebAssets.Map["RMBCK.web.assets.icon.png"] == "assets/icon.png", "assets 子目录映射正确");
+        Assert(WebAssets.Map.ContainsKey("RMBCK.web.viewer.html"), "含 viewer.html 映射");
+        Assert(WebAssets.Map["RMBCK.web.viewer.html"] == "viewer.html", "viewer.html 相对路径正确");
+
+        // Map 与 build.bat / test.bat 的 /resource: 列表必须 1:1：
+        // 任一映射缺少嵌入资源时，这里能直接抓到（而不是静默生成残缺缓存）
+        Assembly asm = Assembly.GetExecutingAssembly();
+        int resourceCount = 0;
+        foreach (var kv in WebAssets.Map)
+        {
+            using (Stream s = asm.GetManifestResourceStream(kv.Key))
+            {
+                bool exists = s != null;
+                Assert(exists, "嵌入资源存在：" + kv.Key);
+                if (exists) resourceCount++;
+            }
+        }
+        Assert(resourceCount == WebAssets.Map.Count,
+            "全部 " + WebAssets.Map.Count + " 个映射均可读取（实际 " + resourceCount + "）");
+
         string txt = WebAssets.ReadText("index.html");
         Assert(txt != null && txt.IndexOf("<html") >= 0, "ReadText 读取 index.html");
         Assert(txt != null && txt.IndexOf("navBtn") >= 0, "ReadText 读到前端导航骨架");
+        string viewer = WebAssets.ReadText("viewer.html");
+        Assert(viewer != null && viewer.IndexOf("assets/err.jpg") >= 0, "viewer.html 默认显示 err.jpg");
+        Assert(viewer != null && viewer.IndexOf("closeViewer") >= 0, "viewer.html 关闭时通知宿主");
+        Assert(viewer != null && viewer.IndexOf("Escape") >= 0, "viewer.html 支持 Esc 关闭");
 
         string dir = null;
         try
@@ -396,6 +420,7 @@ class TestRunner
             Assert(File.Exists(Path.Combine(dir, "app.css")), "Extract 输出 app.css");
             Assert(File.Exists(Path.Combine(dir, "app.js")), "Extract 输出 app.js");
             Assert(File.Exists(Path.Combine(dir, "overlay.html")), "Extract 输出 overlay.html");
+            Assert(File.Exists(Path.Combine(dir, "viewer.html")), "Extract 输出 viewer.html");
             Assert(File.Exists(Path.Combine(dir, "assets", "icon.png")), "Extract 输出 assets/icon.png");
             Assert(File.Exists(Path.Combine(dir, ".ready")), "Extract 写入 .ready 标记");
             string[] allFiles = Directory.GetFiles(dir, "*", SearchOption.AllDirectories);

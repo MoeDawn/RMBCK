@@ -10,6 +10,7 @@ if not exist "%CSC%" set CSC=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe
   /resource:web\overlay.html,RMBCK.web.overlay.html ^
   /resource:web\overlay.css,RMBCK.web.overlay.css ^
   /resource:web\overlay.js,RMBCK.web.overlay.js ^
+  /resource:web\viewer.html,RMBCK.web.viewer.html ^
   /resource:web\assets\icon.png,RMBCK.web.assets.icon.png ^
   /resource:web\assets\iconf1.png,RMBCK.web.assets.iconf1.png ^
   /resource:web\assets\iconf2.png,RMBCK.web.assets.iconf2.png ^

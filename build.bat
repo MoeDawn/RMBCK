@@ -17,6 +17,7 @@ rem 注意：exe 文件名里的版本号需与 src\Program.cs 的 AssemblyVersi
   /resource:web\overlay.html,RMBCK.web.overlay.html ^
   /resource:web\overlay.css,RMBCK.web.overlay.css ^
   /resource:web\overlay.js,RMBCK.web.overlay.js ^
+  /resource:web\viewer.html,RMBCK.web.viewer.html ^
   /resource:web\assets\icon.png,RMBCK.web.assets.icon.png ^
   /resource:web\assets\iconf1.png,RMBCK.web.assets.iconf1.png ^
   /resource:web\assets\iconf2.png,RMBCK.web.assets.iconf2.png ^
