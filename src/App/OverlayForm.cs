@@ -90,13 +90,30 @@ class OverlayForm : Form
     // 预热：把窗口显示到屏幕外并设为完全透明，只为触发 Load -> InitAsync，
     // 让 WebView2 控制器与 overlay.html 在用户真正需要之前就绪。
     // 悬浮窗冷启动实测约 6 秒，若不预热，第一次 Toast/彩蛋会来不及显示。
+    // ---- 预热 ----
+    // WebView2 控制器 + overlay.html 的首次就绪实测约 6 秒；用户第一次需要
+    // Toast/彩蛋时根本等不起。预热时把窗口移到屏幕外并设为完全透明，只为
+    // 触发 Load -> InitAsync。真正的目标位置单独记录在 _intentBounds，
+    // 不能和预热位置混用，否则彩蛋会画到 Toast 的位置上。
+    Rectangle _intentBounds;
+    bool _warmUp = true;
+
+    /// <summary>调用方希望窗口最终出现的位置与尺寸；预热结束后据此复原。</summary>
+    public void SetIntentBounds(Rectangle bounds)
+    {
+        _intentBounds = bounds;
+        if (!_warmUp && !IsDisposed && !Disposing)
+        {
+            try { Bounds = bounds; } catch { }
+        }
+    }
+
     public void WarmUp()
     {
         if (IsDisposed || Disposing) return;
         try
         {
-            // 记住预热前的位置：EndWarmUp 必须把它挪回屏幕内，否则内容画在屏幕外
-            if (_warmHome.Width == 0) _warmHome = Bounds;
+            if (_intentBounds.Width == 0) _intentBounds = Bounds;
             Rectangle area = Screen.PrimaryScreen.WorkingArea;
             Opacity = 0;
             StartPosition = FormStartPosition.Manual;
@@ -106,8 +123,7 @@ class OverlayForm : Form
         catch { }
     }
 
-    // 预热结束后恢复可见：复原透明度并把窗口挪回屏幕内的真实位置。
-    // 不能覆盖 Width/Height —— 彩蛋高度由页面回报的 eggResize 控制。
+    // 预热结束：复原透明度并回到调用方指定的位置（尺寸以当前意图为准）
     void EndWarmUp()
     {
         if (!_warmUp) return;
@@ -115,13 +131,10 @@ class OverlayForm : Form
         try
         {
             Opacity = 1;
-            if (_warmHome.Width > 0)
-                Bounds = new Rectangle(_warmHome.X, _warmHome.Y, Bounds.Width, Bounds.Height);
+            if (_intentBounds.Width > 0) Bounds = _intentBounds;
         }
         catch { }
     }
-    bool _warmUp = true;
-    Rectangle _warmHome;
 
     protected override bool ShowWithoutActivation { get { return true; } }
 
@@ -496,7 +509,8 @@ class OverlayForm : Form
                     }
                     else if (m.Action == "eggResize")
                     {
-                        // 彩蛋窗口随内容行数向下长高；宽度不变，位置保持左上角锚定
+                        // 彩蛋窗口随内容行数向下长高；宽度不变，位置保持左上角锚定。
+                        // 同时更新意图尺寸，避免预热复原时把高度打回初始值。
                         int h = Bridge.GetInt(m.Args, "height", 0);
                         if (h > 0 && !IsDisposed && !Disposing)
                         {
@@ -504,8 +518,12 @@ class OverlayForm : Form
                             int maxH = Math.Max(120, a.Height - (Bounds.Top - a.Top) - 24);
                             if (h > maxH) h = maxH;
                             int newH = Math.Max(80, h);
-                            if (Bounds.Height != newH)
-                                Bounds = new Rectangle(Bounds.X, Bounds.Y, Bounds.Width, newH);
+                            Rectangle target = new Rectangle(
+                                _intentBounds.Width > 0 ? _intentBounds.X : Bounds.X,
+                                _intentBounds.Width > 0 ? _intentBounds.Y : Bounds.Y,
+                                _intentBounds.Width > 0 ? _intentBounds.Width : Bounds.Width,
+                                newH);
+                            SetIntentBounds(target);
                         }
                     }
                 }

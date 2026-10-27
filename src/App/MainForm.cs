@@ -492,9 +492,11 @@ class MainForm : Form
                     bounds.Size, bounds.Location);
                 _toastWin.SetTheme(_rt.Settings.Theme);   // 建窗即排队主题，导航完成后先应用
             }
-            else if (_toastWin.Bounds != bounds)
+            else
             {
-                _toastWin.Bounds = bounds;
+                // 预热期间窗口被移到屏幕外，Bounds 不是真实位置；
+                // 统一通过意图位置设置，避免和预热状态互相覆盖。
+                _toastWin.SetIntentBounds(bounds);
             }
             return _toastWin;
         }
