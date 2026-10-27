@@ -14,6 +14,20 @@ class OverlayForm : Form
     const int WM_MOUSEACTIVATE = 0x0021;
     const int MA_NOACTIVATE = 3;
     const int MaxPending = 8;
+    const int SendQueued = 0;
+    const int SendPosted = 1;
+    const int SendPostFailed = -1;
+
+    class PendingItem
+    {
+        public string Json;
+        public bool IsContent;
+        public PendingItem(string json, bool isContent)
+        {
+            Json = json;
+            IsContent = isContent;
+        }
+    }
 
     // WebView2 控制器创建时可能把线程焦点移到悬浮窗；记住悬浮窗出现前
     // 的焦点窗口，只在焦点确实被悬浮窗拿走时还原，绝不主动激活任何窗口。
@@ -45,8 +59,10 @@ class OverlayForm : Form
     bool _hudVisible;
     string _hudText = "";
 
-    readonly Queue<string> _pending = new Queue<string>();
+    Queue<PendingItem> _pending = new Queue<PendingItem>();
+    int _queuedContent;
     Timer _hideTimer;
+    Timer _retryTimer;
 
     public OverlayForm(CoreWebView2Environment env, string webDir, string page, Size size, Point location)
     {
@@ -126,11 +142,13 @@ class OverlayForm : Form
         msg["kind"] = "theme";
         msg["mode"] = _theme;   // 兼容 overlay.js 读取顶层字段
         msg["data"] = data;
-        Send(msg);
+        Send(msg, false);
     }
 
     public void ShowToast(string text, string kind, int durationMs)
     {
+        DropQueuedContent();
+        _contentPending = false;
         _wantVisible = true;
         _wantKind = "toast";
         _toastDurationMs = Math.Max(300, durationMs);
@@ -143,22 +161,27 @@ class OverlayForm : Form
         msg["kind"] = "toast";
         msg["data"] = data;
 
-        if (Send(msg))
+        int sent = Send(msg, true);
+        if (sent == SendPosted)
         {
             // 已就绪：消息已投递，此时才显示并开始计时
+            StopRetry();
             PresentWindow();
             ArmHideTimer();
         }
         else
         {
-            // 尚未导航完成：只排队，窗口保持透明/隐藏；Flush 投递后再显示并计时
+            // 未就绪：排队等 Flush；已就绪但投递失败：排队并做一次有界重试
             _contentPending = true;
             EnsureInitialized();
+            if (sent == SendPostFailed) ScheduleRetry();
         }
     }
 
     public void ShowEgg(object[] items)
     {
+        DropQueuedContent();
+        _contentPending = false;
         _wantVisible = true;
         _wantKind = "egg";
         StopHideTimer();
@@ -169,14 +192,17 @@ class OverlayForm : Form
         msg["kind"] = "egg";
         msg["data"] = data;
 
-        if (Send(msg))
+        int sent = Send(msg, true);
+        if (sent == SendPosted)
         {
+            StopRetry();
             PresentWindow();
         }
         else
         {
             _contentPending = true;
             EnsureInitialized();
+            if (sent == SendPostFailed) ScheduleRetry();
         }
     }
 
@@ -270,6 +296,56 @@ class OverlayForm : Form
     {
         if (!_ready) return;
         PostRaw("{\"kind\":\"clear\",\"data\":{}}");
+    }
+
+    // 新一轮内容取代所有尚未投递的旧内容；主题消息保留不动
+    void DropQueuedContent()
+    {
+        if (_queuedContent <= 0) return;
+        Queue<PendingItem> keep = new Queue<PendingItem>();
+        while (_pending.Count > 0)
+        {
+            PendingItem item = _pending.Dequeue();
+            if (!item.IsContent) keep.Enqueue(item);
+        }
+        _pending = keep;
+        _queuedContent = 0;
+    }
+
+    // 驱逐可能丢掉唯一的待投递内容：清掉待显示状态并隐藏，避免 Flush 显示空窗口
+    // （彩蛋空窗口永远不会收到 eggDone，会永久置顶）
+    void ReconcileContentIfGone()
+    {
+        if (_queuedContent > 0) return;
+        if (!_contentPending) return;
+        _contentPending = false;
+        _wantVisible = false;
+        _wantKind = "";
+        StopHideTimer();
+        StopRetry();
+        HideSafely();
+    }
+
+    // 已就绪却投递失败时做一次有界重试；Flush 再次失败会直接隐藏
+    void ScheduleRetry()
+    {
+        if (_retryTimer == null)
+        {
+            _retryTimer = new Timer();
+            _retryTimer.Interval = 150;
+            _retryTimer.Tick += delegate
+            {
+                _retryTimer.Stop();
+                if (_ready) Flush();   // 导航中被重置则留给 NavigationCompleted
+            };
+        }
+        _retryTimer.Stop();
+        _retryTimer.Start();
+    }
+
+    void StopRetry()
+    {
+        if (_retryTimer != null) _retryTimer.Stop();
     }
 
     static bool FocusInOverlay(IntPtr h)
@@ -384,19 +460,30 @@ class OverlayForm : Form
         }
     }
 
-    bool Send(Dictionary<string, object> payload)
+    int Send(Dictionary<string, object> payload, bool isContent)
     {
         string json = Bridge.Serialize(payload);
-        if (_ready && PostRaw(json)) return true;
-        Enqueue(json);
-        return false;
+        if (_ready)
+        {
+            if (PostRaw(json)) return SendPosted;
+            Enqueue(json, isContent);
+            return SendPostFailed;
+        }
+        Enqueue(json, isContent);
+        return SendQueued;
     }
 
-    void Enqueue(string json)
+    void Enqueue(string json, bool isContent)
     {
-        _pending.Enqueue(json);
+        _pending.Enqueue(new PendingItem(json, isContent));
+        if (isContent) _queuedContent++;
         // 导航始终失败时也不能无限增长：丢弃最旧的，保留最新内容
-        while (_pending.Count > MaxPending) _pending.Dequeue();
+        while (_pending.Count > MaxPending)
+        {
+            PendingItem old = _pending.Dequeue();
+            if (old.IsContent) _queuedContent--;
+        }
+        ReconcileContentIfGone();
     }
 
     bool PostRaw(string json)
@@ -433,37 +520,75 @@ class OverlayForm : Form
     {
         try
         {
-            bool hadContent = _contentPending;
+            bool claimed = _contentPending;
+            bool hadContent = claimed && _queuedContent > 0;
+            bool contentPosted = false;
             while (_pending.Count > 0)
             {
-                string json = _pending.Dequeue();
-                PostRaw(json);
+                PendingItem item = _pending.Dequeue();
+                if (item.IsContent)
+                {
+                    if (_queuedContent > 0) _queuedContent--;
+                    contentPosted = PostRaw(item.Json);
+                }
+                else
+                {
+                    PostRaw(item.Json);
+                }
             }
+            _queuedContent = 0;
             _contentPending = false;
 
             // 内容消息确实投递成功后才显示并启动隐藏计时；
             // 如果在此期间已被新一轮操作取代/取消，则不再显示。
             if (hadContent && _wantVisible)
             {
-                if (_wantKind == "toast")
+                if (contentPosted)
                 {
-                    PresentWindow();
-                    ArmHideTimer();
+                    StopRetry();
+                    if (_wantKind == "toast")
+                    {
+                        PresentWindow();
+                        ArmHideTimer();
+                    }
+                    else if (_wantKind == "egg")
+                    {
+                        PresentWindow();
+                    }
                 }
-                else if (_wantKind == "egg")
+                else
                 {
-                    PresentWindow();
+                    // 投递失败：不显示空窗口，也不让旧内容无限停留
+                    _wantVisible = false;
+                    _wantKind = "";
+                    StopHideTimer();
+                    StopRetry();
+                    HideSafely();
                 }
+            }
+            else if (claimed && !hadContent)
+            {
+                // 没有可投递内容（例如被驱逐）：保持隐藏，绝不显示空窗口
+                _wantVisible = false;
+                _wantKind = "";
+                StopHideTimer();
+                StopRetry();
+                HideSafely();
             }
 
             // HUD 只按最终状态投递一次：按下期间已松开则不投递 hud/hud-hide，
-            // 绝不让一次已结束的长按显示 HUD。
+            // 绝不让一次已结束的长按显示 HUD。投递失败时不显示空 HUD。
             if (_hudWantVisible)
             {
                 if (PostHud(_hudText))
                 {
                     _hudVisible = true;
                     PresentWindow();
+                }
+                else if (!_hudVisible)
+                {
+                    // 投递失败且没有旧 HUD：不要留下空置顶窗口
+                    HideSafely();
                 }
             }
             else if (_hudVisible)
@@ -486,11 +611,19 @@ class OverlayForm : Form
             _wantVisible = false;
             _hudWantVisible = false;
             _hudVisible = false;
+            _contentPending = false;
+            _queuedContent = 0;
             if (_hideTimer != null)
             {
                 _hideTimer.Stop();
                 _hideTimer.Dispose();
                 _hideTimer = null;
+            }
+            if (_retryTimer != null)
+            {
+                _retryTimer.Stop();
+                _retryTimer.Dispose();
+                _retryTimer = null;
             }
             _pending.Clear();
         }
