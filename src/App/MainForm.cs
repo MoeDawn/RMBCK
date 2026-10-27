@@ -29,7 +29,6 @@ class MainForm : Form
     // 托盘与关闭流程
     TrayManager _tray;
     bool _exiting;            // 只有真正退出才允许窗体关闭
-    bool _closeDialogOpen;    // 网页关闭确认框已展示
 
     // 启动骨架：WebView2 首次启动约 5s，窗口立即显示原生占位内容
     Panel _skeleton;
@@ -280,7 +279,7 @@ class MainForm : Form
                         // 首次导航失败：保留骨架，走与初始化异常相同的友好退出路径
                         MessageBox.Show("界面加载失败：" + e.WebErrorStatus, "右键长按联动器",
                             MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        Close();
+                        DoExit();
                         return;
                     }
                     ShowRealPage();          // 首次导航完成：一次性换掉原生骨架
@@ -295,7 +294,7 @@ class MainForm : Form
         {
             MessageBox.Show("界面初始化失败：" + ex.Message, "右键长按联动器",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
-            Close();
+            DoExit();
         }
     }
 
@@ -547,7 +546,6 @@ class MainForm : Form
         {
             string result = Bridge.GetStr(m.Args, "result", "Minimize");
             bool remember = Bridge.GetBool(m.Args, "remember", false);
-            _closeDialogOpen = false;
             if (remember)
             {
                 s.CloseAction = result == "Exit" ? "Exit" : "Minimize";
@@ -556,7 +554,8 @@ class MainForm : Form
             if (result == "Exit") DoExit(); else MinimizeToTray();
             return;
         }
-        if (a == "cancelCloseConfirm") { _closeDialogOpen = false; return; }
+        // 网页模态框自行关闭即可；后端不保存“对话框已打开”状态
+        if (a == "cancelCloseConfirm") return;
         if (a == "minimizeToTray") { MinimizeToTray(); return; }
         if (a == "closeRequest") { RequestClose(); return; }
         if (a == "exitApp") { DoExit(); return; }
@@ -1592,13 +1591,16 @@ class MainForm : Form
         }
         catch { ic = null; }
         if (ic == null) ic = SystemIcons.Application;
+        TrayManager tray = null;
         try
         {
-            _tray = new TrayManager(ic, ShowMain, ToggleEnabledFromTray, DoExit);
-            _tray.SetEnabledState(_rt.Settings.Enabled);
+            tray = new TrayManager(ic, ShowMain, ToggleEnabledFromTray, DoExit);
+            tray.SetEnabledState(_rt.Settings.Enabled);
+            _tray = tray;
         }
         catch
         {
+            if (tray != null) { try { tray.Dispose(); } catch { } }
             _tray = null;
         }
         finally
@@ -1615,7 +1617,6 @@ class MainForm : Form
         SaveSettings();
         ApplyLinkageGate();
         PushState();   // 内含网页状态与托盘文案同步
-        if (_tray != null) _tray.SetEnabledState(s.Enabled);
     }
 
     public void ShowMain()
@@ -1635,6 +1636,18 @@ class MainForm : Form
 
     public void MinimizeToTray()
     {
+        if (_tray == null)
+        {
+            // 没有托盘图标时隐藏窗口将无法恢复，直接走真实退出
+            try
+            {
+                MessageBox.Show("托盘图标不可用，程序将退出。", "右键长按联动器",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch { }
+            DoExit();
+            return;
+        }
         // 离开界面前撤销进行中的捕获
         CancelCapture();
         try
@@ -1674,23 +1687,25 @@ class MainForm : Form
         var s = _rt.Settings;
         if (s.CloseAction == "Minimize") { MinimizeToTray(); return; }
         if (s.CloseAction == "Exit") { DoExit(); return; }
-        if (_closeDialogOpen)
-        {
-            // 网页模态框可被点击遮罩/Esc 关闭且不会发 cancelCloseConfirm；
-            // 再次请求关闭时重新发送 askClose，避免标志永久卡住。
-            Send("askClose", new Dictionary<string, object>());
-            return;
-        }
-        _closeDialogOpen = true;
+        // 网页模态框可被 Esc/遮罩关闭且不会通知后端；每次关闭请求都重新发送，
+        // 由 showCloseModal 原地重建，不存在“已打开”状态需要清理。
         Send("askClose", new Dictionary<string, object>());
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (!_exiting &&
+            (e.CloseReason == CloseReason.WindowsShutDown ||
+             e.CloseReason == CloseReason.TaskManagerClosing))
+        {
+            // 注销/关机/任务管理器结束进程：不弹网页确认，直接真实退出
+            e.Cancel = true;   // 取消本次关闭，由 DoExit 的再入 Close 完成
+            DoExit();
+            return;
+        }
         if (_exiting)
         {
             // 只有真正退出才释放全局热键；取消关闭/最小化到托盘时绝不能释放
-            SaveSettingsNow();
             if (_capturing) EndCapture();
             ReleaseHotkey();
             base.OnFormClosing(e);

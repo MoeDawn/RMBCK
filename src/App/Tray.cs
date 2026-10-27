@@ -16,37 +16,37 @@ class TrayManager : IDisposable
     {
         _onOpen = onOpen; _onToggle = onToggle; _onExit = onExit;
         try { _icon = new Icon(windowIcon, 16, 16); } catch { _icon = null; }
-        _tray = new NotifyIcon();
-        _tray.Icon = _icon != null ? _icon : SystemIcons.Application;
-        _tray.Text = "Senren＊Banka";
-        _tray.Visible = true;
-
-        var menu = new ContextMenuStrip();
-        menu.RenderMode = ToolStripRenderMode.ManagerRenderMode;
-        var rs = new ToolStripProfessionalRenderer(new SakuraProfessionalColors());
-        rs.RoundedEdges = true;
-        menu.Renderer = rs;
-        menu.ShowImageMargin = false;
-        menu.Items.Add("🌸 打开主界面", null, delegate { _onOpen(); });
-        _toggle = new ToolStripMenuItem();
-        _toggle.Click += delegate { _onToggle(); };
-        menu.Items.Add(_toggle);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("✕ 退出", null, delegate { _onExit(); });
-        _tray.ContextMenuStrip = menu;
-        _tray.DoubleClick += delegate { _onOpen(); };
-    }
-
-    // 供冒烟测试断言菜单文案与实际状态保持一致
-    public string ToggleText { get { return _toggle.Text; } }
-
-    // 托盘图标是否仍然可见（Dispose 后返回 false）
-    public bool Visible
-    {
-        get
+        ContextMenuStrip menu = null;
+        try
         {
-            try { return _tray.Visible; }
-            catch { return false; }
+            _tray = new NotifyIcon();
+            _tray.Icon = _icon != null ? _icon : SystemIcons.Application;
+            _tray.Text = "Senren＊Banka";
+
+            menu = new ContextMenuStrip();
+            menu.RenderMode = ToolStripRenderMode.ManagerRenderMode;
+            var rs = new ToolStripProfessionalRenderer(new SakuraProfessionalColors());
+            rs.RoundedEdges = true;
+            menu.Renderer = rs;
+            menu.ShowImageMargin = false;
+            menu.Items.Add("🌸 打开主界面", null, delegate { _onOpen(); });
+            _toggle = new ToolStripMenuItem();
+            _toggle.Click += delegate { _onToggle(); };
+            menu.Items.Add(_toggle);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("✕ 退出", null, delegate { _onExit(); });
+            _tray.ContextMenuStrip = menu;
+            _tray.DoubleClick += delegate { _onOpen(); };
+
+            // 所有配置成功后才显示，避免半成品图标残留在通知区域
+            _tray.Visible = true;
+        }
+        catch
+        {
+            try { if (_tray != null) { _tray.Visible = false; _tray.Dispose(); } } catch { }
+            if (menu != null) { try { menu.Dispose(); } catch { } }
+            if (_icon != null) { try { _icon.Dispose(); } catch { } _icon = null; }
+            throw;
         }
     }
 
