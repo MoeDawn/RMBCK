@@ -26,6 +26,9 @@ class MainForm : Form
     bool _kbInstallFailed;
     bool _kbFailureShown;
 
+    // 报错反馈链：进行中忽略重复提交；主窗口隐藏时中止，绝不在托盘/游戏上方弹查看器
+    bool _feedbackBusy;
+
     // 托盘与关闭流程
     TrayManager _tray;
     bool _exiting;            // 只有真正退出才允许窗体关闭
@@ -644,7 +647,7 @@ class MainForm : Form
             catch (Exception ex) { ShowToast("无法打开作者主页：" + ex.Message, "err", 2200); }
             return;
         }
-        if (a == "submitFeedback") { StartFeedbackFlow(); return; }
+        if (a == "submitFeedback") { if (!_feedbackBusy) StartFeedbackFlow(); return; }
 
         // ---- 概览页动作：持久化 + 控制器联动 + 状态推送 ----
         if (a == "toggleEnabled")
@@ -1242,7 +1245,9 @@ class MainForm : Form
     // Task 14: v1 报错反馈流程 —— 两条提示后全屏显示 err.jpg（占卜彩蛋）
     void StartFeedbackFlow()
     {
-        if (IsDisposed || Disposing) return;
+        if (IsDisposed || Disposing || !Visible) return;
+        if (_feedbackBusy) return;
+        _feedbackBusy = true;
 
         // 悬浮窗冷启动约 2s：第一条 toast 会先排队。必须等它真正投递后再计时，
         // 否则第二条 toast 到达时会按“最新内容优先”丢掉第一条，用户看不到 v1 的完整提示。
@@ -1268,6 +1273,14 @@ class MainForm : Form
         int waited = 0;
         wait.Tick += delegate
         {
+            // 最小化到托盘后立即中止：不能在隐藏的主窗口背后继续弹提示/查看器
+            if (IsDisposed || Disposing || !Visible)
+            {
+                wait.Stop();
+                wait.Dispose();
+                _feedbackBusy = false;
+                return;
+            }
             waited += 50;
             bool ready;
             try { ready = w.IsReady || w.IsDisposed; } catch { ready = true; }
@@ -1275,7 +1288,6 @@ class MainForm : Form
             if (!ready && waited < 6000) return;
             wait.Stop();
             wait.Dispose();
-            if (IsDisposed || Disposing) return;
             ScheduleFeedbackToast2();
         };
         wait.Start();
@@ -1283,20 +1295,33 @@ class MainForm : Form
 
     void ShowFeedbackToastThenSchedule()
     {
+        if (IsDisposed || Disposing || !Visible)
+        {
+            _feedbackBusy = false;
+            return;
+        }
         ShowToast("正在提交报错反馈...", "info", 1500);
         ScheduleFeedbackToast2();
     }
 
     void ScheduleFeedbackToast2()
     {
-        if (IsDisposed || Disposing) return;
+        if (IsDisposed || Disposing || !Visible)
+        {
+            _feedbackBusy = false;
+            return;
+        }
         Timer t1 = new Timer();
         t1.Interval = 1500;
         t1.Tick += delegate
         {
             t1.Stop();
             t1.Dispose();
-            if (IsDisposed || Disposing) return;
+            if (IsDisposed || Disposing || !Visible)
+            {
+                _feedbackBusy = false;
+                return;
+            }
             ShowToast("正在占卜...", "info", 2000);
             Timer t2 = new Timer();
             t2.Interval = 2000;
@@ -1304,7 +1329,11 @@ class MainForm : Form
             {
                 t2.Stop();
                 t2.Dispose();
-                if (IsDisposed || Disposing) return;
+                if (IsDisposed || Disposing || !Visible)
+                {
+                    _feedbackBusy = false;
+                    return;
+                }
                 OpenErrorImage();
             };
             t2.Start();
@@ -1315,9 +1344,14 @@ class MainForm : Form
     // 全屏 err.jpg 查看器：复用进程唯一的 WebView2 环境（绝不新建环境）
     void OpenErrorImage()
     {
-        if (IsDisposed || Disposing) return;
+        if (IsDisposed || Disposing || !Visible)
+        {
+            _feedbackBusy = false;
+            return;
+        }
         if (_rt == null || _rt.WebEnv == null)
         {
+            _feedbackBusy = false;
             ShowToast("界面环境未就绪，无法显示报错图片", "err", 2200);
             return;
         }
@@ -1328,12 +1362,14 @@ class MainForm : Form
                 errPath = Path.Combine(_rt.WebDir, "assets", "err.jpg");
             if (errPath == null || !File.Exists(errPath))
             {
+                _feedbackBusy = false;
                 ShowToast("缺少报错图片 err.jpg", "err", 2200);
                 return;
             }
         }
         catch
         {
+            _feedbackBusy = false;
             ShowToast("无法读取报错图片 err.jpg", "err", 2200);
             return;
         }
@@ -1365,11 +1401,14 @@ class MainForm : Form
             viewer.ShowDialog(this);
             viewer.Dispose();
             viewer = null;
+            _feedbackBusy = false;
         }
         catch
         {
+            bool gone = viewer != null && ViewerGone(viewer);
             if (viewer != null) { try { viewer.Dispose(); } catch { } }
-            ShowToast("无法显示报错图片", "err", 2200);
+            _feedbackBusy = false;
+            if (!gone) ShowToast("无法显示报错图片", "err", 2200);
         }
     }
 
@@ -1382,8 +1421,9 @@ class MainForm : Form
             CoreWebView2 core = wv.CoreWebView2;
             if (core == null)
             {
+                bool gone = ViewerGone(owner);
                 CloseViewer(owner);
-                ShowToast("无法创建图片查看界面", "err", 2200);
+                if (!gone) ShowToast("无法创建图片查看界面", "err", 2200);
                 return;
             }
             core.Settings.AreDevToolsEnabled = false;
@@ -1408,8 +1448,10 @@ class MainForm : Form
             {
                 if (!e.IsSuccess)
                 {
+                    // 用户在初始化期间按 Esc 关闭时静默：不要误报“无法加载”
+                    bool gone = ViewerGone(owner);
                     CloseViewer(owner);
-                    ShowToast("无法加载报错图片", "err", 2200);
+                    if (!gone) ShowToast("无法加载报错图片", "err", 2200);
                     return;
                 }
                 try { wv.Focus(); } catch { }
@@ -1418,9 +1460,17 @@ class MainForm : Form
         }
         catch
         {
+            // 用户主动关闭导致的初始化中断必须静默
+            bool gone = ViewerGone(owner);
             CloseViewer(owner);
-            ShowToast("无法显示报错图片", "err", 2200);
+            if (!gone) ShowToast("无法显示报错图片", "err", 2200);
         }
+    }
+
+    static bool ViewerGone(Form viewer)
+    {
+        try { return viewer == null || viewer.IsDisposed || viewer.Disposing; }
+        catch { return true; }
     }
 
     void CloseViewer(Form viewer)

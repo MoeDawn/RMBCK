@@ -21,6 +21,7 @@ class TestRunner
         TestTriggerController();
         TestTriggerDelayAndMods();
         TestWebAssets();
+        TestResourceListParity();
         TestBridge();
         TestHistory();
         TestHotkeyDescribe();
@@ -443,6 +444,92 @@ class TestRunner
         {
             if (dir != null) { try { Directory.Delete(dir, true); } catch { } }
         }
+    }
+
+    static void TestResourceListParity()
+    {
+        Section("资源清单反向一致性");
+        string dir = AppDomain.CurrentDomain.BaseDirectory;
+        string buildPath = Path.Combine(dir, "build.bat");
+        string testPath = Path.Combine(dir, "test.bat");
+        if (!File.Exists(buildPath) || !File.Exists(testPath))
+        {
+            dir = Environment.CurrentDirectory;
+            buildPath = Path.Combine(dir, "build.bat");
+            testPath = Path.Combine(dir, "test.bat");
+        }
+        if (!File.Exists(buildPath) || !File.Exists(testPath))
+        {
+            Console.WriteLine("  SKIP  未找到 build.bat/test.bat（目录 " + dir + "）");
+            return;
+        }
+
+        List<string> buildAliases;
+        List<string> testAliases;
+        try
+        {
+            buildAliases = ReadResourceAliases(buildPath);
+            testAliases = ReadResourceAliases(testPath);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("  SKIP  无法读取 .bat 资源清单：" + ex.Message);
+            return;
+        }
+        if (buildAliases == null || testAliases == null)
+        {
+            Console.WriteLine("  SKIP  .bat 内容不像明文构建脚本（疑似密文），跳过反向一致性检查");
+            return;
+        }
+
+        List<string> expected = new List<string>(WebAssets.Map.Keys);
+        ReportResourceDiff("build.bat", buildAliases);
+        ReportResourceDiff("test.bat", testAliases);
+        Assert(SameSet(buildAliases, expected),
+            "build.bat 的 /resource: 别名与 Map 完全一致（" + buildAliases.Count + " 项）");
+        Assert(SameSet(testAliases, expected),
+            "test.bat 的 /resource: 别名与 Map 完全一致（" + testAliases.Count + " 项）");
+    }
+
+    // 读取 /resource: 行中逗号后的 RMBCK.* 别名；内容不像明文 .bat 时返回 null（DLP 密文场景）
+    static List<string> ReadResourceAliases(string path)
+    {
+        string text = File.ReadAllText(path);
+        if (text.IndexOf("@echo off", StringComparison.OrdinalIgnoreCase) < 0 &&
+            text.IndexOf("/target:", StringComparison.Ordinal) < 0)
+            return null;
+
+        List<string> aliases = new List<string>();
+        string[] lines = text.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i].Trim();
+            if (!line.StartsWith("/resource:", StringComparison.Ordinal)) continue;
+            int comma = line.LastIndexOf(',');
+            if (comma < 0) continue;
+            string alias = line.Substring(comma + 1).Trim();
+            if (alias.EndsWith("^", StringComparison.Ordinal))
+                alias = alias.Substring(0, alias.Length - 1).Trim();
+            if (alias.StartsWith("RMBCK.", StringComparison.Ordinal)) aliases.Add(alias);
+        }
+        return aliases;
+    }
+
+    static bool SameSet(List<string> a, List<string> b)
+    {
+        HashSet<string> sa = new HashSet<string>(a, StringComparer.Ordinal);
+        HashSet<string> sb = new HashSet<string>(b, StringComparer.Ordinal);
+        return sa.Count == a.Count && sb.Count == b.Count && sa.SetEquals(sb);
+    }
+
+    static void ReportResourceDiff(string name, List<string> aliases)
+    {
+        HashSet<string> got = new HashSet<string>(aliases, StringComparer.Ordinal);
+        HashSet<string> want = new HashSet<string>(WebAssets.Map.Keys, StringComparer.Ordinal);
+        foreach (string key in want)
+            if (!got.Contains(key)) Console.WriteLine("  MISSING " + name + " <- " + key);
+        foreach (string key in got)
+            if (!want.Contains(key)) Console.WriteLine("  EXTRA   " + name + " -> " + key);
     }
 
     static void TestBridge()
