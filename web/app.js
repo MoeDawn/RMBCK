@@ -53,6 +53,7 @@
     // 各页面由后续任务挂载 window.render_<page>；存在时才调用，避免破坏占位骨架
     var fn = window["render_" + page];
     if (typeof fn === "function") fn(state);
+    if (typeof window.__syncSecretDot === "function") window.__syncSecretDot(state);
   }
   window.__render = render;
 
@@ -155,6 +156,24 @@
     t.focus();
   }
   window.__showFeedback = showFeedback;
+
+  // 隐蔽开关（沿用 v1）：右下角 8px 圆点，切换彩蛋概率 1/20 ↔ 3/5。
+  // 关闭态几乎不可见；开启后变强调色并出现指针，只有知道位置的人才点得到。
+  var secretDot = $("secretDot");
+  if (secretDot) {
+    secretDot.onclick = function () {
+      var cur = !!(window.__state && window.__state.eggBoost);
+      send("setSetting", { key: "eggBoost", value: !cur });
+      // 乐观切换，等 C# 的 state 回推确认
+      secretDot.classList.toggle("on", !cur);
+      secretDot.style.cursor = !cur ? "pointer" : "default";
+    };
+  }
+  window.__syncSecretDot = function (s) {
+    if (!secretDot || !s) return;
+    secretDot.classList.toggle("on", !!s.eggBoost);
+    secretDot.style.cursor = s.eggBoost ? "pointer" : "default";
+  };
 
   // 通用组件
   window.__switch = function (on, onChange) {

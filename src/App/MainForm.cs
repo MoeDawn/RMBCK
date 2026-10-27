@@ -956,6 +956,7 @@ class MainForm : Form
         else if (key == "suppressHud") s.SuppressHud = Bridge.GetBool(args, "value", s.SuppressHud);
         else if (key == "suppressHotkeyToast") s.SuppressHotkeyToast = Bridge.GetBool(args, "value", s.SuppressHotkeyToast);
         else if (key == "headerAnim") s.HeaderAnim = Bridge.GetBool(args, "value", s.HeaderAnim);
+        else if (key == "eggBoost") s.EggBoost = Bridge.GetBool(args, "value", s.EggBoost);
     }
 
     // ---- 按键捕获 ----
