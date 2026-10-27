@@ -11,11 +11,23 @@ class TrayManager : IDisposable
     readonly Action _onToggle;
     readonly Action _onExit;
     Icon _icon;
+    // 16×16 复制失败时回退为调用方的完整尺寸图标：此时 TrayManager 不拥有该对象，
+    // 由 InitTray 保留并负责释放，避免共享图标被提前 Dispose。
+    bool _ownsIcon;
 
     public TrayManager(Icon windowIcon, Action onOpen, Action onToggle, Action onExit)
     {
         _onOpen = onOpen; _onToggle = onToggle; _onExit = onExit;
-        try { _icon = new Icon(windowIcon, 16, 16); } catch { _icon = null; }
+        try
+        {
+            _icon = new Icon(windowIcon, 16, 16);
+            _ownsIcon = true;
+        }
+        catch
+        {
+            _icon = windowIcon;   // 回退：保留完整尺寸图标，不置 null
+            _ownsIcon = false;
+        }
         ContextMenuStrip menu = null;
         try
         {
@@ -45,10 +57,14 @@ class TrayManager : IDisposable
         {
             try { if (_tray != null) { _tray.Visible = false; _tray.Dispose(); } } catch { }
             if (menu != null) { try { menu.Dispose(); } catch { } }
-            if (_icon != null) { try { _icon.Dispose(); } catch { } _icon = null; }
+            if (_icon != null && _ownsIcon) { try { _icon.Dispose(); } catch { } }
+            _icon = null;
             throw;
         }
     }
+
+    // 回退为调用方图标时返回 true：调用方必须继续持有，不能立即 Dispose
+    public bool SharesCallerIcon { get { return _icon != null && !_ownsIcon; } }
 
     public void SetEnabledState(bool enabled)
     {
@@ -63,7 +79,7 @@ class TrayManager : IDisposable
     public void Dispose()
     {
         try { _tray.Visible = false; _tray.Dispose(); } catch { }
-        try { if (_icon != null) _icon.Dispose(); } catch { }
+        try { if (_icon != null && _ownsIcon) _icon.Dispose(); } catch { }
     }
 }
 

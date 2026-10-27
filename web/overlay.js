@@ -45,7 +45,8 @@
     var kind = msg.kind;
     var data = msg.data || {};
     if (kind === "toast") {
-      resetRoot("");
+      // 反馈流程使用居中大卡片；普通 Toast 仍是左上角紧凑样式
+      resetRoot(data.center ? "centerRoot" : "");
       var c = document.createElement("div");
       c.className = "card" + (data.kind ? " " + data.kind : "");
       c.textContent = textOf(data.text);

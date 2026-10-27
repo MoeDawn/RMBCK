@@ -147,6 +147,12 @@ class OverlayForm : Form
 
     public void ShowToast(string text, string kind, int durationMs)
     {
+        ShowToast(text, kind, durationMs, false);
+    }
+
+    // center=true：窗口内居中显示大字号卡片（宿主负责把窗口移到屏幕中央）
+    public void ShowToast(string text, string kind, int durationMs, bool center)
+    {
         DropQueuedContent();
         _contentPending = false;
         _wantVisible = true;
@@ -157,6 +163,7 @@ class OverlayForm : Form
         Dictionary<string, object> data = new Dictionary<string, object>();
         data["text"] = text;
         data["kind"] = kind;
+        if (center) data["center"] = true;
         Dictionary<string, object> msg = new Dictionary<string, object>();
         msg["kind"] = "toast";
         msg["data"] = data;

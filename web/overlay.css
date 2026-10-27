@@ -60,6 +60,25 @@ body { font: 13px/1.6 "Microsoft YaHei UI", "Segoe UI", sans-serif; color: var(-
 @keyframes slideIn { from { opacity: 0; transform: translateY(-8px); } }
 .big { color: var(--accent); font-weight: 600; }
 
+/* 反馈流程专用：窗口临时放大到主屏中央时的居中大卡片 */
+#root.centerRoot {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+}
+#root.centerRoot .card {
+  max-width: 100%;
+  padding: 22px 30px;
+  border-radius: 18px;
+  font-size: 18px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.5;
+}
+html[data-theme="day"] #root.centerRoot .card { background: rgba(255,255,255,.97); }
+
 /* ---------- HUD ---------- */
 #root.hudRoot {
   display: flex;

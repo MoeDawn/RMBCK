@@ -143,6 +143,13 @@ input[type=text], input[type=number], select {
   padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--cardHi); color: var(--text); font: inherit; font-size: 12px; }
 
+/* select 的关闭态与原生下拉列表必须使用不透明底色：
+   --cardHi 是半透明的，Chromium 原生弹层不会与其下方的卡片背景合成。 */
+select { background-color: #1a1e2a; }
+select option { background: #1a1e2a; color: var(--text); }
+html[data-theme="day"] select { background-color: #ffffff; }
+html[data-theme="day"] select option { background: #ffffff; color: var(--text); }
+
 /* ---------- 概览页 ---------- */
 #page-overview select { min-width: 120px; max-width: 190px; text-overflow: ellipsis; }
 #page-overview input[type=number] { text-align: right; }

@@ -510,6 +510,38 @@ class MainForm : Form
         try { w.ShowToast(text, kind, durationMs); } catch { }
     }
 
+    // 反馈流程专用：复用 Toast 窗口，但临时移到主屏中央并放大；overlay.css 的
+    // centerRoot 让卡片在窗口内居中，流程结束调用 RestoreToastCorner 恢复角落几何。
+    public void ShowCenterToast(string text, string kind, int durationMs)
+    {
+        if (_rt.Settings.SuppressToast) return;
+        OverlayForm w = ToastWindow(false);
+        if (w == null) return;
+        try
+        {
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            int cw = Math.Min(520, Math.Max(240, area.Width - 80));
+            int ch = Math.Min(160, Math.Max(120, area.Height - 80));
+            w.Bounds = new Rectangle(
+                area.Left + (area.Width - cw) / 2,
+                area.Top + (area.Height - ch) / 2,
+                cw, ch);
+            w.ShowToast(text, kind, durationMs, true);
+        }
+        catch { }
+    }
+
+    // 反馈流程结束：恢复 Toast 窗口的常规右上角几何（下一次普通 Toast 也会自动恢复）
+    void RestoreToastCorner()
+    {
+        try
+        {
+            if (_toastWin == null || _toastWin.IsDisposed) return;
+            ToastWindow(false);
+        }
+        catch { }
+    }
+
     public void ShowEgg(object[] items)
     {
         if (items == null || items.Length == 0) return;
@@ -1302,7 +1334,7 @@ class MainForm : Form
             ShowFeedbackToastThenSchedule();
             return;
         }
-        ShowToast("正在提交报错反馈...", "info", 1500);
+        ShowCenterToast("正在提交报错反馈...", "info", 1500);
         if (w.IsReady)
         {
             ScheduleFeedbackToast2();
@@ -1340,7 +1372,7 @@ class MainForm : Form
             _feedbackBusy = false;
             return;
         }
-        ShowToast("正在提交报错反馈...", "info", 1500);
+        ShowCenterToast("正在提交报错反馈...", "info", 1500);
         ScheduleFeedbackToast2();
     }
 
@@ -1362,7 +1394,7 @@ class MainForm : Form
                 _feedbackBusy = false;
                 return;
             }
-            ShowToast("正在占卜...", "info", 2000);
+            ShowCenterToast("正在占卜...", "info", 2000);
             Timer t2 = new Timer();
             t2.Interval = 2000;
             t2.Tick += delegate
@@ -1374,6 +1406,7 @@ class MainForm : Form
                     _feedbackBusy = false;
                     return;
                 }
+                RestoreToastCorner();
                 OpenErrorImage();
             };
             t2.Start();
@@ -1424,6 +1457,7 @@ class MainForm : Form
             viewer.StartPosition = FormStartPosition.Manual;
             viewer.Bounds = Screen.PrimaryScreen.Bounds;   // 全屏（含任务栏区域）
             viewer.BackColor = Color.Black;
+            viewer.Opacity = 0;   // WebView2 导航完成前保持全透明，避免纯黑闪屏
             viewer.ShowInTaskbar = false;
             viewer.KeyPreview = true;
 
@@ -1512,6 +1546,8 @@ class MainForm : Form
                     if (!gone) ShowToast("无法加载报错图片", "err", 2200);
                     return;
                 }
+                if (ViewerGone(owner)) return;
+                try { owner.Opacity = 1; owner.Activate(); } catch { }
                 try { wv.Focus(); } catch { }
             };
             core.Navigate("https://rmbck.local/viewer.html?src=assets/err.jpg");
@@ -1939,8 +1975,10 @@ class MainForm : Form
         }
         finally
         {
-            // TrayManager 内部已复制出 16×16 图标；共享系统图标不可释放
-            if (ic != SystemIcons.Application) { try { ic.Dispose(); } catch { } }
+            // 正常路径 TrayManager 已复制出 16×16 图标，这里释放调用方副本；
+            // 回退到完整尺寸图标时 TrayManager 与调用方共享同一对象，必须保留到进程退出。
+            bool shared = tray != null && tray.SharesCallerIcon;
+            if (ic != SystemIcons.Application && !shared) { try { ic.Dispose(); } catch { } }
         }
     }
 

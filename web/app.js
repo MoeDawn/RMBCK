@@ -113,7 +113,7 @@
     var title = el("h4", null, "报错反馈");
     title.id = "feedbackModalTitle";
     m.appendChild(title);
-    m.appendChild(el("div", "muted", "描述你遇到的问题，我们会占卜一下（认真脸）。"));
+    m.appendChild(el("div", "muted", "请描述你遇到的问题。"));
 
     var t = el("textarea");
     t.placeholder = "问题描述…";
