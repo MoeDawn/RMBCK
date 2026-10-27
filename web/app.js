@@ -66,6 +66,33 @@
   }
   window.__toast = toast;
 
+  // 反馈流程的进度遮罩：直接画在主页面里，主页面早已加载完成，
+  // 不像透明悬浮窗那样要等 2 秒冷启动——用户提交后立刻能看到反馈动画。
+  var progressEl = null;
+  function showProgress(d) {
+    if (!d.visible) {
+      if (progressEl && progressEl.parentNode) progressEl.parentNode.removeChild(progressEl);
+      progressEl = null;
+      return;
+    }
+    if (!progressEl) {
+      progressEl = el("div", "progressWrap");
+      var card = el("div", "progressCard");
+      progressEl.appendChild(card);
+      progressEl.appendChild(el("div", "progressBarOuter")).appendChild(el("div", "progressBarFill"));
+      document.body.appendChild(progressEl);
+    }
+    var cardEl = progressEl.querySelector(".progressCard");
+    if (cardEl) cardEl.textContent = d.text || "";
+    var fill = progressEl.querySelector(".progressBarFill");
+    if (fill) {
+      var pct = typeof d.percent === "number" ? Math.max(0, Math.min(100, d.percent)) : 100;
+      fill.style.width = pct + "%";
+      fill.style.transition = d.animate ? "width .9s ease" : "none";
+    }
+  }
+  window.__showProgress = showProgress;
+
   function showCloseModal() {
     var w = $("modalWrap");
     w.innerHTML = "";
@@ -940,6 +967,7 @@
         render();
       }
       else if (msg.type === "toast") { toast(data && data.text, data && data.kind, data && data.ms); }
+      else if (msg.type === "progress") { showProgress(data || {}); }
       else if (msg.type === "askClose") { showCloseModal(); }
       else if (msg.type === "processes") {
         window.__processes = data || [];

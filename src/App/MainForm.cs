@@ -54,6 +54,8 @@ class MainForm : Form
         BackColor = Color.FromArgb(18, 20, 28);
         KeyPreview = true;
         Text = "右键长按联动器";
+        // 任务栏/Alt+Tab 读的是 Form.Icon；不赋值就会显示 WinForms 默认的红黄蓝方块
+        ApplyWindowIcon();
 
         Padding = new Padding(BORDER);   // 6px 原生缩放边：WebView2 不覆盖窗体边缘
         _wv = new WebView2();
@@ -1315,104 +1317,65 @@ class MainForm : Form
         return d;
     }
 
-    // Task 14: v1 报错反馈流程 —— 两条提示后全屏显示 err.jpg（占卜彩蛋）
+    // 报错反馈流程：进度动画直接画在主页面里（主页早已加载完成，立即可见），
+    // 不再依赖透明悬浮窗——后者冷启动约 2 秒，比提示本身的时长还长。
+    // 步骤与 v1 一致：上传数据 -> 分析 -> 占卜 -> 弹出 err.jpg。
     void StartFeedbackFlow()
     {
         if (IsDisposed || Disposing || !Visible) return;
         if (_feedbackBusy) return;
         _feedbackBusy = true;
 
-        // 悬浮窗冷启动约 2s：第一条 toast 会先排队。必须等它真正投递后再计时，
-        // 否则第二条 toast 到达时会按“最新内容优先”丢掉第一条，用户看不到 v1 的完整提示。
-        if (_rt.Settings.SuppressToast || _rt.WebEnv == null)
+        int step = 0;
+        ShowFeedbackStep(step);
+
+        Timer t = new Timer();
+        t.Interval = 1100;
+        t.Tick += delegate
         {
-            ShowFeedbackToastThenSchedule();
-            return;
-        }
-        OverlayForm w = ToastWindow(false);
-        if (w == null)
-        {
-            ShowFeedbackToastThenSchedule();
-            return;
-        }
-        ShowCenterToast("正在提交报错反馈...", "info", 1500);
-        if (w.IsReady)
-        {
-            ScheduleFeedbackToast2();
-            return;
-        }
-        Timer wait = new Timer();
-        wait.Interval = 50;
-        int waited = 0;
-        wait.Tick += delegate
-        {
-            // 最小化到托盘后立即中止：不能在隐藏的主窗口背后继续弹提示/查看器
             if (IsDisposed || Disposing || !Visible)
             {
-                wait.Stop();
-                wait.Dispose();
+                t.Stop();
+                t.Dispose();
                 _feedbackBusy = false;
                 return;
             }
-            waited += 50;
-            bool ready;
-            try { ready = w.IsReady || w.IsDisposed; } catch { ready = true; }
-            // 悬浮窗导航失败时不能永久等待：6s 后照常继续后续流程
-            if (!ready && waited < 6000) return;
-            wait.Stop();
-            wait.Dispose();
-            ScheduleFeedbackToast2();
-        };
-        wait.Start();
-    }
-
-    void ShowFeedbackToastThenSchedule()
-    {
-        if (IsDisposed || Disposing || !Visible)
-        {
-            _feedbackBusy = false;
-            return;
-        }
-        ShowCenterToast("正在提交报错反馈...", "info", 1500);
-        ScheduleFeedbackToast2();
-    }
-
-    void ScheduleFeedbackToast2()
-    {
-        if (IsDisposed || Disposing || !Visible)
-        {
-            _feedbackBusy = false;
-            return;
-        }
-        Timer t1 = new Timer();
-        t1.Interval = 1500;
-        t1.Tick += delegate
-        {
-            t1.Stop();
-            t1.Dispose();
-            if (IsDisposed || Disposing || !Visible)
+            step++;
+            if (step < FeedbackSteps.Length)
             {
-                _feedbackBusy = false;
+                ShowFeedbackStep(step);
                 return;
             }
-            ShowCenterToast("正在占卜...", "info", 2000);
-            Timer t2 = new Timer();
-            t2.Interval = 2000;
-            t2.Tick += delegate
-            {
-                t2.Stop();
-                t2.Dispose();
-                if (IsDisposed || Disposing || !Visible)
-                {
-                    _feedbackBusy = false;
-                    return;
-                }
-                RestoreToastCorner();
-                OpenErrorImage();
-            };
-            t2.Start();
+            t.Stop();
+            t.Dispose();
+            ProgressVisible(false, "", 0);
+            OpenErrorImage();
         };
-        t1.Start();
+        t.Start();
+    }
+
+    static readonly string[] FeedbackSteps = new string[]
+    {
+        "正在上传数据到服务器...",
+        "正在分析报错信息...",
+        "正在占卜...",
+    };
+
+    void ShowFeedbackStep(int index)
+    {
+        int percent = (int)Math.Round((index + 1) * 100.0 / (FeedbackSteps.Length + 1));
+        ProgressVisible(true, FeedbackSteps[index], percent);
+    }
+
+    // 进度遮罩画在主页面上：不抢焦点、不依赖悬浮窗、随网页一起缩放
+    void ProgressVisible(bool visible, string text, int percent)
+    {
+        var d = new Dictionary<string, object>();
+        d["visible"] = visible;
+        d["text"] = text;
+        d["percent"] = percent;
+        d["animate"] = true;
+        Send("progress", d);
     }
 
     // 全屏 err.jpg 查看器：复用进程唯一的 WebView2 环境（绝不新建环境）
@@ -1950,6 +1913,25 @@ class MainForm : Form
     }
 
     // ---- 托盘与关闭流程 ----
+    // 无边框窗体的标题栏是网页自绘的，但任务栏 / Alt+Tab / 任务视图读的是 Form.Icon。
+    // 不显式赋值，WinForms 会使用默认的红黄蓝方块图标。
+    void ApplyWindowIcon()
+    {
+        try
+        {
+            Stream s = typeof(MainForm).Assembly.GetManifestResourceStream("RMBCK.web.assets.window.ico");
+            if (s != null)
+            {
+                using (s)
+                {
+                    Icon loaded = new Icon(s);
+                    Icon = loaded;              // Form.Icon 接管引用生命周期
+                }
+            }
+        }
+        catch { }
+    }
+
     void InitTray()
     {
         Icon ic = null;

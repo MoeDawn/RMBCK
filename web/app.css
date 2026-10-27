@@ -249,3 +249,22 @@ html[data-theme="day"] select option { background: #ffffff; color: var(--text); 
   background: var(--secret-off); opacity: .9; }
 .secretDot.on { background: var(--accent); cursor: pointer; }
 
+/* 反馈流程进度遮罩：画在主页面内，不依赖悬浮窗冷启动 */
+.progressWrap {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; background: rgba(6, 8, 12, .55); backdrop-filter: blur(2px);
+  pointer-events: all; }
+.progressCard {
+  min-width: 320px; max-width: 70vw; padding: 22px 32px; border-radius: 16px;
+  background: var(--cardHi); border: 1px solid var(--accent);
+  color: var(--text); font-size: 17px; font-weight: 600; text-align: center;
+  box-shadow: var(--shadow); animation: progressIn .16s ease; }
+@keyframes progressIn { from { opacity: 0; transform: translateY(-6px); } }
+.progressBarOuter {
+  width: 320px; max-width: 60vw; height: 6px; border-radius: 99px;
+  background: var(--track); overflow: hidden; }
+.progressBarFill {
+  width: 0; height: 100%; border-radius: 99px; background: var(--grad); }
+
+
