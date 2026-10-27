@@ -100,31 +100,113 @@ html[data-theme="day"] #root.centerRoot .card { background: rgba(255,255,255,.97
 }
 @keyframes pulse { 50% { box-shadow: 0 0 14px rgba(34,211,238,.45); } }
 
-/* ---------- 彩蛋 ---------- */
-.egg { padding: 14px 18px; }
+/* ---------- 彩蛋：外挂终端风格（无边框，文字自身发光浮在画面上） ---------- */
+#root.eggRoot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 10px 14px;
+  background: transparent;
+}
+
+.egg {
+  position: relative;
+  min-width: 430px;
+  padding: 0 4px 4px 4px;
+  background: transparent;          /* 无边框：不画任何底色 */
+  font-family: Consolas, "Cascadia Mono", "Microsoft YaHei UI", monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #9fe9ff;
+  text-shadow: 0 0 6px rgba(34, 211, 238, .85), 0 0 16px rgba(34, 211, 238, .35);
+  transition: opacity .45s ease;
+  animation: eggIn .22s ease;
+}
+@keyframes eggIn {
+  from { opacity: 0; transform: translateY(-8px) scale(.985); }
+}
+.egg.eggOut { opacity: 0; transform: translateY(-6px); }
+
+.eggHead {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; letter-spacing: 2px;
+  color: #7c5cff;
+  text-shadow: 0 0 8px rgba(124, 92, 255, .8);
+  padding-bottom: 5px;
+}
+.eggHeadDot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 8px #34d399;
+  animation: eggBlink 1.1s steps(1) infinite;
+}
+@keyframes eggBlink { 50% { opacity: .25; } }
+
+/* 扫描线：高光自上而下循环掠过 */
+.eggScan {
+  position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(34,211,238,.85), transparent);
+  box-shadow: 0 0 12px rgba(34, 211, 238, .9);
+  animation: eggScanMove 3.4s linear infinite;
+  pointer-events: none;
+}
+@keyframes eggScanMove {
+  0%   { transform: translateY(0);     opacity: 0; }
+  10%  { opacity: .85; }
+  90%  { opacity: .85; }
+  100% { transform: translateY(520px); opacity: 0; }
+}
+
+.eggBody { position: relative; }
+
 .egg .line {
+  display: flex; align-items: baseline; gap: 6px;
   white-space: pre;
-  font-size: 12px;
-  line-height: 1.55;
   opacity: 0;
-  transform: translateY(2px);
+  transform: translateX(-6px);
 }
-.egg .line.in { opacity: 1; transform: none; transition: opacity .12s, transform .12s; }
-.egg .line.accent { color: #ff9ecb; }
-.egg .mark { margin-left: 6px; }
-.egg .ok { color: var(--ok); }
-.egg .err { color: var(--err); }
-.egg .warn { color: var(--warn); }
-.egg .cursor {
+.egg .line.in {
+  opacity: 1; transform: none;
+  transition: opacity .2s ease, transform .2s ease;
+}
+.egg .eggIdx { flex: 0 0 3.2em; color: #5b6478; text-shadow: none; font-size: 13px;
+  text-align: right; padding-right: 4px; }
+.egg .eggText { flex: 0 0 auto; }
+.egg .mark { flex: 0 0 auto; margin-left: 6px; }
+.egg .line.accent {
+  color: #ff9ecb;
+  text-shadow: 0 0 6px rgba(255,158,203,.9), 0 0 16px rgba(255,158,203,.4);
+}
+.egg .line.accent .eggIdx { color: #ff9ecb; opacity: .55; text-shadow: none; }
+
+.egg .mark.pop { animation: eggPop .22s ease; }
+@keyframes eggPop { from { transform: scale(.4); opacity: 0; } }
+.egg .ok   { color: #34d399; text-shadow: 0 0 8px rgba(52,211,153,.9); }
+.egg .err  { color: #f87171; text-shadow: 0 0 8px rgba(248,113,113,.9); }
+.egg .warn { color: #fbbf24; text-shadow: 0 0 8px rgba(251,191,36,.9); }
+
+.eggCursor {
   display: inline-block;
-  width: 7px;
-  height: 12px;
-  background: var(--accent2);
-  animation: blink .45s steps(1) infinite;
-  vertical-align: -2px;
-  margin-left: 2px;
+  width: 8px; height: 17px;
+  background: #22d3ee;
+  box-shadow: 0 0 10px rgba(34, 211, 238, .95);
+  animation: eggCursorBlink .5s steps(1) infinite;
+  vertical-align: -3px;
 }
-@keyframes blink { 50% { opacity: 0; } }
+@keyframes eggCursorBlink { 50% { opacity: 0; } }
+
+.eggFoot {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 9px; font-size: 11px;
+  color: #5b6478; text-shadow: none;
+}
+.eggFootBar {
+  flex: 1 1 auto; width: 0; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, #7c5cff, #22d3ee);
+  box-shadow: 0 0 8px rgba(34, 211, 238, .8);
+  transition: width .3s ease;
+}
+.eggFootPct { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 
 /* ---------- 日间补充 ---------- */
 html[data-theme="day"] body { color: #4a4a68; }
@@ -134,5 +216,25 @@ html[data-theme="day"] .card.err { border-color: var(--err); }
 html[data-theme="day"] .card.info { border-color: var(--accent2); }
 html[data-theme="day"] .big { color: #ff6fa5; }
 html[data-theme="day"] .hud { background: rgba(255,255,255,.86); border-color: rgba(255,111,165,.5); }
-html[data-theme="day"] .egg .line.accent { color: #ff6fa5; }
-html[data-theme="day"] .egg .cursor { background: #a78bfa; }
+
+/* 日间彩蛋：红粉发光，同样无边框 */
+html[data-theme="day"] .egg {
+  color: #e8557f;
+  text-shadow: 0 0 6px rgba(232,85,127,.85), 0 0 16px rgba(255,111,165,.35);
+}
+html[data-theme="day"] .eggHead { color: #c2245c; text-shadow: 0 0 8px rgba(194,36,92,.6); }
+html[data-theme="day"] .egg .line.accent {
+  color: #d63c8c;
+  text-shadow: 0 0 6px rgba(214,60,140,.8), 0 0 16px rgba(214,60,140,.35);
+}
+html[data-theme="day"] .egg .eggIdx { color: #b08a9c; }
+html[data-theme="day"] .eggCursor { background: #e8557f; box-shadow: 0 0 10px rgba(232,85,127,.9); }
+html[data-theme="day"] .eggScan {
+  background: linear-gradient(90deg, transparent, rgba(232,85,127,.85), transparent);
+  box-shadow: 0 0 12px rgba(232, 85, 127, .9);
+}
+html[data-theme="day"] .eggFootBar {
+  background: linear-gradient(90deg, #ff7aac, #ba94ff);
+  box-shadow: 0 0 8px rgba(255, 111, 165, .7);
+}
+html[data-theme="day"] .eggFoot { color: #b08a9c; }

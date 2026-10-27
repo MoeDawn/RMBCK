@@ -465,8 +465,10 @@ class MainForm : Form
     // 窗口只创建一次，切换尺寸不会重建 WebView2。
     const int ToastWidth = 420;
     const int ToastHeight = 150;
-    const int EggWidth = 440;
-    const int EggHeight = 570;
+    // 彩蛋用外挂终端风格、无边框：初始给一个小高度，随行数由页面回报 eggResize 长高
+    const int EggWidth = 460;
+    const int EggHeight = 160;
+    const int EggMaxHeight = 640;
 
     OverlayForm ToastWindow(bool forEgg)
     {

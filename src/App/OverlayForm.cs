@@ -95,6 +95,8 @@ class OverlayForm : Form
         if (IsDisposed || Disposing) return;
         try
         {
+            // 记住预热前的位置：EndWarmUp 必须把它挪回屏幕内，否则内容画在屏幕外
+            if (_warmHome.Width == 0) _warmHome = Bounds;
             Rectangle area = Screen.PrimaryScreen.WorkingArea;
             Opacity = 0;
             StartPosition = FormStartPosition.Manual;
@@ -104,16 +106,22 @@ class OverlayForm : Form
         catch { }
     }
 
-    // 预热结束后恢复可见：窗口回到真实位置且完全不透明
-    // 预热结束后恢复可见：只复原透明度。位置由调用方（ToastWindow）负责，
-    // 这里不能再写 Bounds，否则会覆盖掉刚设置的彩蛋窗口尺寸。
+    // 预热结束后恢复可见：复原透明度并把窗口挪回屏幕内的真实位置。
+    // 不能覆盖 Width/Height —— 彩蛋高度由页面回报的 eggResize 控制。
     void EndWarmUp()
     {
         if (!_warmUp) return;
         _warmUp = false;
-        try { Opacity = 1; } catch { }
+        try
+        {
+            Opacity = 1;
+            if (_warmHome.Width > 0)
+                Bounds = new Rectangle(_warmHome.X, _warmHome.Y, Bounds.Width, Bounds.Height);
+        }
+        catch { }
     }
     bool _warmUp = true;
+    Rectangle _warmHome;
 
     protected override bool ShowWithoutActivation { get { return true; } }
 
@@ -485,6 +493,20 @@ class OverlayForm : Form
                         _wantVisible = false;
                         _wantKind = "";
                         HideSafely();
+                    }
+                    else if (m.Action == "eggResize")
+                    {
+                        // 彩蛋窗口随内容行数向下长高；宽度不变，位置保持左上角锚定
+                        int h = Bridge.GetInt(m.Args, "height", 0);
+                        if (h > 0 && !IsDisposed && !Disposing)
+                        {
+                            Rectangle a = Screen.PrimaryScreen.WorkingArea;
+                            int maxH = Math.Max(120, a.Height - (Bounds.Top - a.Top) - 24);
+                            if (h > maxH) h = maxH;
+                            int newH = Math.Max(80, h);
+                            if (Bounds.Height != newH)
+                                Bounds = new Rectangle(Bounds.X, Bounds.Y, Bounds.Width, newH);
+                        }
                     }
                 }
                 catch { }
