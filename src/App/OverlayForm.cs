@@ -87,6 +87,39 @@ class OverlayForm : Form
         Load += delegate { InitAsync(); };
     }
 
+    // 预热：把窗口显示到屏幕外并设为完全透明，只为触发 Load -> InitAsync，
+    // 让 WebView2 控制器与 overlay.html 在用户真正需要之前就绪。
+    // 悬浮窗冷启动实测约 6 秒，若不预热，第一次 Toast/彩蛋会来不及显示。
+    public void WarmUp()
+    {
+        if (IsDisposed || Disposing) return;
+        try
+        {
+            _warmUpBounds = Bounds;      // 记住真实位置，EndWarmUp 时还原
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            Opacity = 0;
+            StartPosition = FormStartPosition.Manual;
+            Bounds = new Rectangle(area.Left - Width - 200, area.Top - Height - 200, Width, Height);
+            if (!Visible) Show();
+        }
+        catch { }
+    }
+
+    // 预热结束后恢复可见：窗口回到真实位置且完全不透明
+    void EndWarmUp()
+    {
+        if (!_warmUp) return;
+        _warmUp = false;
+        try
+        {
+            Opacity = 1;
+            if (_warmUpBounds.Width > 0) Bounds = _warmUpBounds;
+        }
+        catch { }
+    }
+    bool _warmUp = true;
+    Rectangle _warmUpBounds;
+
     protected override bool ShowWithoutActivation { get { return true; } }
 
     // WS_EX_NOACTIVATE：WebView2 控制器创建时可能请求焦点，加上该样式后
@@ -243,6 +276,7 @@ class OverlayForm : Form
         if (_everShown || IsDisposed || Disposing) return;
         try
         {
+            EndWarmUp();   // 预热的屏幕外透明状态必须先复原，否则内容看不见
             RememberFocus();
             Show();
             _everShown = true;
@@ -258,6 +292,7 @@ class OverlayForm : Form
         if (IsDisposed || Disposing) return;
         try
         {
+            EndWarmUp();   // 预热窗口在屏幕外且透明：显示真实内容前先复原
             if (!Visible)
             {
                 RememberFocus();

@@ -231,6 +231,30 @@ class MainForm : Form
             _wv.BringToFront();
         }
         catch { }
+        // 主界面就绪后再预热悬浮窗：避免和主 WebView2 抢首次启动，
+        // 用户第一次触发 Toast/彩蛋时窗口已经热好（冷启动实测约 6 秒）。
+        ScheduleOverlayWarmUp();
+    }
+
+    Timer _warmTimer;
+    void ScheduleOverlayWarmUp()
+    {
+        if (_warmTimer != null) return;
+        _warmTimer = new Timer();
+        _warmTimer.Interval = 1200;
+        _warmTimer.Tick += delegate
+        {
+            _warmTimer.Stop();
+            _warmTimer.Dispose();
+            _warmTimer = null;
+            try
+            {
+                OverlayForm toast = ToastWindow(false);
+                if (toast != null) toast.WarmUp();
+            }
+            catch { }
+        };
+        _warmTimer.Start();
     }
 
     protected override void OnShown(EventArgs e)
