@@ -26,6 +26,11 @@ class MainForm : Form
     bool _kbInstallFailed;
     bool _kbFailureShown;
 
+    // 托盘与关闭流程
+    TrayManager _tray;
+    bool _exiting;            // 只有真正退出才允许窗体关闭
+    bool _closeDialogOpen;    // 网页关闭确认框已展示
+
     // 启动骨架：WebView2 首次启动约 5s，窗口立即显示原生占位内容
     Panel _skeleton;
     Image _skeletonLogo;
@@ -53,6 +58,9 @@ class MainForm : Form
         _wv.Visible = false;             // 首次 NavigationCompleted 后再显示
         Controls.Add(_wv);
         BuildSkeleton();
+
+        // 托盘先于 WebView2 创建：窗口隐藏/关闭时程序仍可操作
+        InitTray();
 
         // 鼠标钩子：10ms 轮询触发判定（与 1.1.0 一致）
         _rt.Hook.RightButtonDown += delegate { _rt.Ctrl.OnRightDown(Environment.TickCount); };
@@ -293,6 +301,8 @@ class MainForm : Form
 
     public void PushState()
     {
+        // 托盘菜单文案与网页状态来自同一事实源；页面未就绪时也要同步托盘
+        if (_tray != null) _tray.SetEnabledState(_rt.Settings.Enabled);
         if (!_ready) return;
         try
         {
@@ -531,14 +541,27 @@ class MainForm : Form
             RefreshAutostartAsync();
             return;
         }
-        if (a == "dragStart") { BeginDrag(); return; }
-        if (a == "minimizeToTray" || a == "closeRequest")
+
+        // ---- 关闭确认 / 托盘 ----
+        if (a == "closeConfirm")
         {
-            // Task 13 实现真正的托盘/关闭逻辑；离开界面前先撤销进行中的捕获
-            CancelCapture();
-            ShowToast("该功能将在后续版本启用", "info", 1200);
+            string result = Bridge.GetStr(m.Args, "result", "Minimize");
+            bool remember = Bridge.GetBool(m.Args, "remember", false);
+            _closeDialogOpen = false;
+            if (remember)
+            {
+                s.CloseAction = result == "Exit" ? "Exit" : "Minimize";
+                try { ConfigStore.SavePointer(s, System.IO.Path.Combine(_rt.ExeDir, "config.ini")); } catch { }
+            }
+            if (result == "Exit") DoExit(); else MinimizeToTray();
             return;
         }
+        if (a == "cancelCloseConfirm") { _closeDialogOpen = false; return; }
+        if (a == "minimizeToTray") { MinimizeToTray(); return; }
+        if (a == "closeRequest") { RequestClose(); return; }
+        if (a == "exitApp") { DoExit(); return; }
+
+        if (a == "dragStart") { BeginDrag(); return; }
         if (a == "setAutostart")
         {
             // 上一轮 schtasks 尚未结束时忽略连击（前端同时显示忙碌）
@@ -1556,26 +1579,137 @@ class MainForm : Form
         InitHotkey();   // 全局热键必须等窗口句柄存在后才能注册
     }
 
+    // ---- 托盘与关闭流程 ----
+    void InitTray()
+    {
+        Icon ic = null;
+        try
+        {
+            using (Stream s = typeof(MainForm).Assembly.GetManifestResourceStream("RMBCK.web.assets.window.ico"))
+            {
+                if (s != null) ic = new Icon(s);
+            }
+        }
+        catch { ic = null; }
+        if (ic == null) ic = SystemIcons.Application;
+        try
+        {
+            _tray = new TrayManager(ic, ShowMain, ToggleEnabledFromTray, DoExit);
+            _tray.SetEnabledState(_rt.Settings.Enabled);
+        }
+        catch
+        {
+            _tray = null;
+        }
+        finally
+        {
+            // TrayManager 内部已复制出 16×16 图标；共享系统图标不可释放
+            if (ic != SystemIcons.Application) { try { ic.Dispose(); } catch { } }
+        }
+    }
+
+    void ToggleEnabledFromTray()
+    {
+        var s = _rt.Settings;
+        s.Enabled = !s.Enabled;
+        SaveSettings();
+        ApplyLinkageGate();
+        PushState();   // 内含网页状态与托盘文案同步
+        if (_tray != null) _tray.SetEnabledState(s.Enabled);
+    }
+
+    public void ShowMain()
+    {
+        if (IsDisposed || Disposing) return;
+        try
+        {
+            ShowInTaskbar = true;
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+            // v1 已知可靠的置前方式：临时 TopMost 再恢复
+            TopMost = true; Activate(); TopMost = false;
+        }
+        catch { }
+    }
+
+    public void MinimizeToTray()
+    {
+        // 离开界面前撤销进行中的捕获
+        CancelCapture();
+        try
+        {
+            ShowInTaskbar = false;
+            Hide();
+        }
+        catch { }
+    }
+
+    void DoExit()
+    {
+        if (_exiting) return;
+        _exiting = true;
+
+        CancelCapture();
+        SaveSettingsNow();
+
+        // 真正退出的顺序：托盘 → 定时器 → 悬浮窗 → 热键 → 关闭窗体
+        TrayManager tray = _tray;
+        _tray = null;
+        if (tray != null) { try { tray.Hide(); tray.Dispose(); } catch { } }
+        try { if (_tick != null) _tick.Stop(); } catch { }
+        try { if (_gateTimer != null) _gateTimer.Stop(); } catch { }
+        try { if (_testTimer != null) _testTimer.Stop(); } catch { }
+        if (_toastWin != null) { try { _toastWin.Dispose(); } catch { } _toastWin = null; }
+        if (_hudWin != null) { try { _hudWin.Dispose(); } catch { } _hudWin = null; }
+        ReleaseHotkey();
+
+        Close();
+    }
+
+    void RequestClose()
+    {
+        CancelCapture();      // 关闭/最小化前撤销进行中的捕获
+        SaveSettingsNow();    // 防抖静默期内关窗不丢数据
+        var s = _rt.Settings;
+        if (s.CloseAction == "Minimize") { MinimizeToTray(); return; }
+        if (s.CloseAction == "Exit") { DoExit(); return; }
+        if (_closeDialogOpen)
+        {
+            // 网页模态框可被点击遮罩/Esc 关闭且不会发 cancelCloseConfirm；
+            // 再次请求关闭时重新发送 askClose，避免标志永久卡住。
+            Send("askClose", new Dictionary<string, object>());
+            return;
+        }
+        _closeDialogOpen = true;
+        Send("askClose", new Dictionary<string, object>());
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        // 当前版本关闭窗口即退出（Task 13 托盘上线后应只在真正退出分支调用）
-        ReleaseHotkey();
-        // 捕获不能随窗口关闭而残留；钩子会在 OnFormClosed 中卸载
-        if (_capturing) EndCapture();
-        // 防抖静默期内关窗不丢数据
-        SaveSettingsNow();
-        base.OnFormClosing(e);
+        if (_exiting)
+        {
+            // 只有真正退出才释放全局热键；取消关闭/最小化到托盘时绝不能释放
+            SaveSettingsNow();
+            if (_capturing) EndCapture();
+            ReleaseHotkey();
+            base.OnFormClosing(e);
+            return;
+        }
+        // 关闭被取消，交给 RequestClose 决定最小化、退出或弹网页确认框
+        e.Cancel = true;
+        RequestClose();
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
-        _tick.Stop();
-        _tick.Dispose();
-        if (_gateTimer != null) { _gateTimer.Stop(); _gateTimer.Dispose(); }
-        if (_testTimer != null) { _testTimer.Stop(); _testTimer.Dispose(); }
-        if (_saveTimer != null) { _saveTimer.Stop(); _saveTimer.Dispose(); }
-        ReleaseHotkey();   // 幂等兜底
-        if (_rt.KbHook != null) { _rt.KbHook.Dispose(); _rt.KbHook = null; }
+        try { if (_tick != null) { _tick.Stop(); _tick.Dispose(); } } catch { }
+        try { if (_gateTimer != null) { _gateTimer.Stop(); _gateTimer.Dispose(); } } catch { }
+        try { if (_testTimer != null) { _testTimer.Stop(); _testTimer.Dispose(); } } catch { }
+        try { if (_saveTimer != null) { _saveTimer.Stop(); _saveTimer.Dispose(); } } catch { }
+        ReleaseHotkey();   // 幂等兜底（仅真正关闭时才会走到这里）
+        try { if (_rt.KbHook != null) { _rt.KbHook.Dispose(); _rt.KbHook = null; } } catch { }
+        if (_tray != null) { try { _tray.Dispose(); } catch { } _tray = null; }
         if (_skeleton != null) _skeleton.Visible = false;
         if (_skeletonLogo != null) { _skeletonLogo.Dispose(); _skeletonLogo = null; }
         if (_toastWin != null) { try { _toastWin.Dispose(); } catch { } _toastWin = null; }
