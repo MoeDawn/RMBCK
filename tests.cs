@@ -161,6 +161,22 @@ class TestRunner
             var s6 = ConfigStore.LoadProfile(Path.Combine(tmp, "旧键.ini"));
             Assert(s6.Keys.Count == 1 && s6.Keys[0].DelayMs == 0 && s6.Keys[0].Mods == 0, "旧配置缺 DelayMs/Mods 回退为 0");
             Assert(s6.Theme == "Night", "旧配置缺 Theme 回退 Night");
+
+            // 旧版 SuppressXxx 语义是「勾选即抑制」，新版界面开关是「开＝正常显示」：
+            // 读取无 NotifyConfigVersion 的旧文件时必须取反，否则老用户升级后弹窗全被静默关闭。
+            File.WriteAllText(Path.Combine(tmp, "旧抑制.ini"),
+                "[General]\nSuppressToast=True\nSuppressEgg=True\nSuppressHud=False\nSuppressHotkeyToast=False\n");
+            var s7 = ConfigStore.LoadProfile(Path.Combine(tmp, "旧抑制.ini"));
+            Assert(s7.SuppressToast == false && s7.SuppressEgg == false, "旧配置 Suppress=True 迁移为不抑制");
+            Assert(s7.SuppressHud == true && s7.SuppressHotkeyToast == true, "旧配置 Suppress=False 迁移为抑制");
+            Assert(s7.LegacySuppressConfig, "旧配置被标记为需要迁移");
+
+            // 已带 NotifyConfigVersion=2 的新文件按原值读取，不得再次取反
+            File.WriteAllText(Path.Combine(tmp, "新抑制.ini"),
+                "[General]\nNotifyConfigVersion=2\nSuppressToast=True\nSuppressEgg=False\n");
+            var s8 = ConfigStore.LoadProfile(Path.Combine(tmp, "新抑制.ini"));
+            Assert(s8.SuppressToast == true && s8.SuppressEgg == false, "新配置 Suppress 原值读取");
+            Assert(!s8.LegacySuppressConfig, "新配置不需要迁移");
         }
         finally { try { Directory.Delete(tmp, true); } catch { } }
     }

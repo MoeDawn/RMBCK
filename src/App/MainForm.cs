@@ -293,8 +293,8 @@ class MainForm : Form
                 // 并撤销依赖页面的测试轮询 / 全局按键捕获，避免后台永久运行。
                 _ready = false;
                 _pageReady = false;
-                _testing = false;
-                try { if (_testTimer != null) _testTimer.Stop(); } catch { }
+                _testing = true;      // 测试面板常开：重载后恢复轮询
+                try { StartTestTimer(); } catch { }
                 if (_capturing) CancelCapture();
                 _procLoading = false;
             };
@@ -326,6 +326,7 @@ class MainForm : Form
                 _ready = true;
                 // 唯一能自愈的消息：无论页面是否已经发过 ready 都重发一次
                 PushState();
+                try { StartTestTimer(); } catch { }   // 测试面板常开
             };
             RefreshAutostartAsync();
             core.Navigate("https://rmbck.local/index.html");
@@ -760,8 +761,9 @@ class MainForm : Form
         }
         if (a == "newProfile") { NewProfile(Bridge.GetStr(m.Args, "name", "")); return; }
         if (a == "deleteProfile") { DeleteProfile(Bridge.GetStr(m.Args, "name", "")); return; }
+        // 测试面板常开，旧版前端若仍发这两个动作也不报错
         if (a == "startTest") { _testing = true; StartTestTimer(); return; }
-        if (a == "stopTest") { _testing = false; StopTestTimer(); return; }
+        if (a == "stopTest") { _testing = true; return; }
 
         // ---- 按键页动作 ----
         if (a == "addKey")
@@ -1237,7 +1239,8 @@ class MainForm : Form
     }
 
     // ---- 测试面板 ----
-    bool _testing;
+    // 默认常开：页面上不再有「开始测试 / 停止测试」开关，进入程序即持续采样。
+    bool _testing = true;
     Timer _testTimer;
     int _lastVk = -1;
 

@@ -505,18 +505,10 @@
     c2.appendChild(row2);
     p.appendChild(c2);
 
-    // 测试面板
+    // 测试面板：常开，不再有开始/停止按钮
     var c3 = el("div", "card");
-    c3.appendChild(el("h3", null, "测试"));
+    c3.appendChild(el("h3", null, "实时状态"));
     var row3 = el("div", "row");
-    var testBtn = el("button", "btn", window.__testing ? "停止测试" : "开始测试");
-    testBtn.id = "testBtn";
-    testBtn.onclick = function () {
-      window.__testing = !window.__testing;
-      send(window.__testing ? "startTest" : "stopTest");
-      render();
-    };
-    row3.appendChild(testBtn);
     var st = window.__testStatus || {};
     var testDown = el("span", "muted", st.down ? "右键：按下" : "右键：释放");
     testDown.id = "testDown";
@@ -547,8 +539,6 @@
     if (keys) keys.textContent = "触发键位：" + (st.keys || "无");
     if (phys) phys.textContent = "实际按下：" + (st.physical || "无");
     if (target) target.textContent = "目标进程：" + (st.target || "未选择（全局生效）");
-    var btn = $("testBtn");
-    if (btn) btn.textContent = window.__testing ? "停止测试" : "开始测试";
   };
 
   // ---------- 进程页 ----------
@@ -706,10 +696,13 @@
     return !!(c && c.active && c.target === "hotkey");
   }
 
-  function settingSwitch(key, on, label) {
+  // invert=true 用于 suppress* 这类「关闭才表示开启」的开关：
+  // 界面显示「开」= 弹窗正常显示（suppress=false），避免用户看到「彩蛋 开」却其实被抑制。
+  function settingSwitch(key, on, label, invert) {
     var box = el("label", "modBox");
-    var sw = window.__switch(on, function (v) {
-      send("setSetting", { key: key, value: v });
+    var shown = invert ? !on : on;
+    var sw = window.__switch(shown, function (v) {
+      send("setSetting", { key: key, value: invert ? !v : v });
     });
     sw.id = "setting_" + key;
     box.appendChild(sw);
@@ -806,11 +799,12 @@
     var c3 = el("div", "card");
     c3.appendChild(el("h3", null, "弹窗与外观"));
     var r3 = el("div", "row");
-    r3.appendChild(settingSwitch("suppressToast", s.suppressToast, "进程切换提示"));
-    r3.appendChild(settingSwitch("suppressEgg", s.suppressEgg, "彩蛋"));
-    r3.appendChild(settingSwitch("suppressHud", s.suppressHud, "HUD 悬浮窗"));
-    r3.appendChild(settingSwitch("suppressHotkeyToast", s.suppressHotkeyToast, "热键状态提示"));
+    r3.appendChild(settingSwitch("suppressToast", s.suppressToast, "进程切换提示", true));
+    r3.appendChild(settingSwitch("suppressEgg", s.suppressEgg, "彩蛋", true));
+    r3.appendChild(settingSwitch("suppressHud", s.suppressHud, "HUD 悬浮窗", true));
+    r3.appendChild(settingSwitch("suppressHotkeyToast", s.suppressHotkeyToast, "热键状态提示", true));
     c3.appendChild(r3);
+    c3.appendChild(el("div", "muted", "开关打开 = 正常显示；关闭 = 不再弹出。"));
     var r3b = el("div", "row");
     r3b.appendChild(el("span", "muted", "主题"));
     var themeBtn = el("button", "btn", s.theme === "Night" ? "夜间（深色）" : "日间（樱花）");

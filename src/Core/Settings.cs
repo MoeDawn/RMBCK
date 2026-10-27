@@ -37,6 +37,8 @@ class AppSettings
     public bool SuppressEgg = false;
     public bool SuppressHud = false;
     public bool SuppressHotkeyToast = false;
+    /// <summary>1.1.0 及更早版本的方案里没有 SuppressNotifications 这一节；读取时用它判断是否需要迁移。</summary>
+    public bool LegacySuppressConfig;
     public bool HeaderAnim = true;
     public uint HotkeyMods = 0x0002;   // MOD_CONTROL
     public uint HotkeyVk = 0x7B;       // VK_F12
@@ -87,6 +89,7 @@ static class ConfigStore
         if (!File.Exists(path)) return s;
         try
         {
+            bool notifyV2 = false;   // 文件里是否已带 NotifyConfigVersion=2
             string section = "";
             foreach (string raw in File.ReadAllLines(path))
             {
@@ -114,6 +117,7 @@ static class ConfigStore
                     else if (k == "SuppressEgg") { if (bool.TryParse(v, out b)) s.SuppressEgg = b; }
                     else if (k == "SuppressHud") { if (bool.TryParse(v, out b)) s.SuppressHud = b; }
                     else if (k == "SuppressHotkeyToast") { if (bool.TryParse(v, out b)) s.SuppressHotkeyToast = b; }
+                    else if (k == "NotifyConfigVersion") { int nv; if (int.TryParse(v, out nv) && nv >= 2) notifyV2 = true; }
                     else if (k == "HeaderAnim") { if (bool.TryParse(v, out b)) s.HeaderAnim = b; }
                     else if (k == "Theme") s.Theme = v;
                     else if (k == "HotkeyMods") { uint u; if (uint.TryParse(v, out u)) s.HotkeyMods = u; }
@@ -140,6 +144,17 @@ static class ConfigStore
                 {
                     try { kc.Vk = KeyNames.Resolve(kc.Name); } catch { kc.Enabled = false; }
                 }
+
+            // 旧版（无 NotifyConfigVersion）里四个 SuppressXxx 的语义是「勾选即抑制」，
+            // 新版界面把开关做成「打开＝正常显示」，值必须取反，否则老用户升级后所有弹窗静默消失。
+            if (!notifyV2)
+            {
+                s.SuppressToast = !s.SuppressToast;
+                s.SuppressEgg = !s.SuppressEgg;
+                s.SuppressHud = !s.SuppressHud;
+                s.SuppressHotkeyToast = !s.SuppressHotkeyToast;
+                s.LegacySuppressConfig = true;
+            }
         }
         catch { }
         return s;
@@ -162,6 +177,8 @@ static class ConfigStore
         sb.AppendLine("SuppressEgg=" + s.SuppressEgg);
         sb.AppendLine("SuppressHud=" + s.SuppressHud);
         sb.AppendLine("SuppressHotkeyToast=" + s.SuppressHotkeyToast);
+        // 新一代语义：开关打开＝弹窗正常显示。保留上面四个旧字段只为读取旧文件。
+        sb.AppendLine("NotifyConfigVersion=2");
         sb.AppendLine("HeaderAnim=" + s.HeaderAnim);
         sb.AppendLine("HotkeyMods=" + s.HotkeyMods);
         sb.AppendLine("HotkeyVk=" + s.HotkeyVk);

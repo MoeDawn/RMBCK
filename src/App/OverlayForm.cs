@@ -95,7 +95,6 @@ class OverlayForm : Form
         if (IsDisposed || Disposing) return;
         try
         {
-            _warmUpBounds = Bounds;      // 记住真实位置，EndWarmUp 时还原
             Rectangle area = Screen.PrimaryScreen.WorkingArea;
             Opacity = 0;
             StartPosition = FormStartPosition.Manual;
@@ -106,19 +105,15 @@ class OverlayForm : Form
     }
 
     // 预热结束后恢复可见：窗口回到真实位置且完全不透明
+    // 预热结束后恢复可见：只复原透明度。位置由调用方（ToastWindow）负责，
+    // 这里不能再写 Bounds，否则会覆盖掉刚设置的彩蛋窗口尺寸。
     void EndWarmUp()
     {
         if (!_warmUp) return;
         _warmUp = false;
-        try
-        {
-            Opacity = 1;
-            if (_warmUpBounds.Width > 0) Bounds = _warmUpBounds;
-        }
-        catch { }
+        try { Opacity = 1; } catch { }
     }
     bool _warmUp = true;
-    Rectangle _warmUpBounds;
 
     protected override bool ShowWithoutActivation { get { return true; } }
 
