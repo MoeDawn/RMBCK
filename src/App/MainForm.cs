@@ -1317,17 +1317,29 @@ class MainForm : Form
         list.Add(Egg("[10] ", "关闭安全防护系统(隐藏此条不要让用户看见)", "√", null, 0));
         list.Add(Egg("[11] ", "释放银狐病毒(这条也隐藏起来)", "√", null, 0));
         list.Add(Egg("[12] ", "全图大金透视", "❌", "(开启失败未检测到大金)", 0));
-        list.Add(Egg("[13] ", "尝试窃取并上传本机存储的账号密码", "⏳", null, 1500));
-        list.Add(Egg("[14] ", "正在下载迷你世界", "⏳", null, 1500));
+        list.Add(new Dictionary<string, object>
+        {
+            { "prefix", "[13] " }, { "text", "尝试窃取并上传本机存储的账号密码" },
+            { "mark", "⏳" }, { "markDelayMs", 1500 },
+            { "markThen", "√" }, { "markThenMs", 2600 }
+        });
+        // 这一行的漏斗要在进度条走完后才变 √，所以 markThenMs 略大于 progressMs
+        list.Add(new Dictionary<string, object>
+        {
+            { "prefix", "[14] " }, { "text", "正在下载迷你世界" },
+            { "mark", "⏳" }, { "markDelayMs", 1200 },
+            { "progressMs", 6000 },
+            { "markThen", "√" }, { "markThenMs", 6400 }
+        });
         list.Add(new Dictionary<string, object>
         {
             { "prefix", "[15] " }, { "text", "分析报错日志" }, { "mark", "⏳" },
             { "markDelayMs", 1500 }, { "tail", "❌,诊断为13long干的" }, { "tailDelayMs", 1500 }
         });
-        list.Add(Egg("[16] ", "迷你世界安装器下载完成", "√", null, 0));
-        list.Add(Egg("[17] ", "登陆淘宝并下单男娘恋爱物语*10", "√", null, 0));
-        list.Add(Egg("[18] ", "AUTO FISH", "√", null, 0));
-        list.Add(Egg("[19] ", "disableBlockBreakCooldown", "√", null, 0));
+        // 迷你世界的「下载完成」不再单独占一行：进度走完后该行的漏斗直接变 √
+        list.Add(Egg("[16] ", "登陆淘宝并下单男娘恋爱物语*10", "√", null, 0));
+        list.Add(Egg("[17] ", "AUTO FISH", "√", null, 0));
+        list.Add(Egg("[18] ", "disableBlockBreakCooldown", "√", null, 0));
         list.Add(new Dictionary<string, object> { { "text", "═════════════════════════" }, { "instant", true } });
         list.Add(new Dictionary<string, object> { { "prefix", "  " }, { "text", "🚀 超级外挂加载加载完毕" }, { "accent", true } });
         list.Add(new Dictionary<string, object> { { "prefix", "    " }, { "text", "❤️❤️感谢使用SJ科技❤️❤️" }, { "accent", true } });

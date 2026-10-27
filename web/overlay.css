@@ -160,24 +160,28 @@ html[data-theme="day"] #root.centerRoot .card { background: rgba(255,255,255,.97
 .eggBody { position: relative; }
 
 .egg .line {
-  display: flex; align-items: baseline; gap: 6px;
+  display: none;                    /* 未出现的行不占位：底栏才能跟着内容往下走 */
+  align-items: baseline; gap: 6px;
   white-space: pre;
-  opacity: 0;
-  transform: translateX(-6px);
 }
 .egg .line.in {
-  opacity: 1; transform: none;
-  transition: opacity .2s ease, transform .2s ease;
+  display: flex;
+  animation: eggLineIn .22s ease both;
 }
-.egg .eggIdx { flex: 0 0 3.2em; color: #5b6478; text-shadow: none; font-size: 13px;
-  text-align: right; padding-right: 4px; }
+@keyframes eggLineIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+.egg .eggIdx { flex: 0 0 3.2em; color: #ff5555; box-sizing: border-box;
+  font-size: 13px; text-align: right; padding-right: 4px;
+  text-shadow: 0 0 6px rgba(255, 85, 85, .75); }
 .egg .eggText { flex: 0 0 auto; }
 .egg .mark { flex: 0 0 auto; margin-left: 6px; }
 .egg .line.accent {
   color: #ff9ecb;
   text-shadow: 0 0 6px rgba(255,158,203,.9), 0 0 16px rgba(255,158,203,.4);
 }
-.egg .line.accent .eggIdx { color: #ff9ecb; opacity: .55; text-shadow: none; }
+.egg .line.accent .eggIdx { color: #ff8f8f; opacity: .8; text-shadow: 0 0 6px rgba(255,85,85,.6); }
 
 .egg .mark.pop { animation: eggPop .22s ease; }
 @keyframes eggPop { from { transform: scale(.4); opacity: 0; } }
@@ -208,6 +212,30 @@ html[data-theme="day"] #root.centerRoot .card { background: rgba(255,255,255,.97
 }
 .eggFootPct { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 
+/* 行内下载进度（[14] 正在下载迷你世界） */
+.eggDl {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 10px; width: 92px;
+  opacity: .95; transition: opacity .3s ease;
+}
+.eggDlBar {
+  flex: 1 1 auto; width: 0; height: 3px; border-radius: 3px;
+  background: linear-gradient(90deg, #7c5cff, #22d3ee);
+  box-shadow: 0 0 8px rgba(34, 211, 238, .85);
+  transition: width .12s linear;
+}
+.eggDlPct {
+  flex: 0 0 auto; font-size: 12px; color: #22d3ee;
+  text-shadow: 0 0 6px rgba(34, 211, 238, .8);
+  font-variant-numeric: tabular-nums;
+}
+.eggDlDone { opacity: 0; }
+html[data-theme="day"] .eggDlBar {
+  background: linear-gradient(90deg, #ff7aac, #ba94ff);
+  box-shadow: 0 0 8px rgba(255, 111, 165, .8);
+}
+html[data-theme="day"] .eggDlPct { color: #d63c8c; text-shadow: 0 0 6px rgba(214,60,140,.7); }
+
 /* ---------- 日间补充 ---------- */
 html[data-theme="day"] body { color: #4a4a68; }
 html[data-theme="day"] .card { background: rgba(255,255,255,.95); border-color: rgba(255,111,165,.55); }
@@ -227,7 +255,7 @@ html[data-theme="day"] .egg .line.accent {
   color: #d63c8c;
   text-shadow: 0 0 6px rgba(214,60,140,.8), 0 0 16px rgba(214,60,140,.35);
 }
-html[data-theme="day"] .egg .eggIdx { color: #b08a9c; }
+html[data-theme="day"] .egg .eggIdx { color: #d32029; text-shadow: 0 0 6px rgba(211,32,41,.5); }
 html[data-theme="day"] .eggCursor { background: #e8557f; box-shadow: 0 0 10px rgba(232,85,127,.9); }
 html[data-theme="day"] .eggScan {
   background: linear-gradient(90deg, transparent, rgba(232,85,127,.85), transparent);

@@ -18,7 +18,10 @@
 
   function clearEgg() {
     if (eggInterval) { clearInterval(eggInterval); eggInterval = null; }
-    for (var i = 0; i < eggTimeouts.length; i++) clearTimeout(eggTimeouts[i]);
+    for (var i = 0; i < eggTimeouts.length; i++) {
+      clearTimeout(eggTimeouts[i]);
+      clearInterval(eggTimeouts[i]);   // 下载进度用的是 interval，两种都要清
+    }
     eggTimeouts = [];
   }
 
@@ -156,6 +159,15 @@
         later(function () {
           L.markEl.textContent = it.mark;
           L.markEl.className = "mark pop " + markClass(it.mark);
+          // markThen：漏斗先转一会儿再变成另一个符号（例如 ⏳ -> √）
+          if (it.markThen && it.markThenMs) {
+            later(function () {
+              L.markEl.textContent = it.markThen;
+              L.markEl.className = "mark pop " + markClass(it.markThen);
+            }, it.markThenMs);
+          }
+          // 下载进度：在行尾追加一个百分比进度条，从 0 走到 100
+          if (it.progressMs && it.progressMs > 0) startDownloadProgress(L, it.progressMs);
           if (it.tail) {
             later(function () {
               L.markEl.textContent = it.mark + it.tail;
@@ -165,6 +177,41 @@
       }
       idx++;
       ch = 0;
+      syncSize();
+    }
+
+    // 在行尾生成一个细进度条 + 百分比，走满后淡出，模拟真实下载
+    function startDownloadProgress(L, totalMs) {
+      var wrap = document.createElement("span");
+      wrap.className = "eggDl";
+      var bar = document.createElement("span");
+      bar.className = "eggDlBar";
+      var pct = document.createElement("span");
+      pct.className = "eggDlPct";
+      pct.textContent = "0%";
+      wrap.appendChild(bar);
+      wrap.appendChild(pct);
+      L.el.appendChild(wrap);
+
+      var steps = 20;
+      var i = 0;
+      var tickMs = Math.max(40, Math.round(totalMs / steps));
+      var timer = setInterval(function () {
+        i++;
+        var p = Math.round((i / steps) * 100);
+        // 前段慢、后段快，更像真实下载
+        bar.style.width = p + "%";
+        pct.textContent = p + "%";
+        if (i >= steps) {
+          clearInterval(timer);
+          later(function () {
+            wrap.classList.add("eggDlDone");
+            later(function () { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, 700);
+          }, 260);
+        }
+      }, tickMs);
+      // 让 clearEgg 能一并清掉
+      eggTimeouts.push(timer);
       syncSize();
     }
 
