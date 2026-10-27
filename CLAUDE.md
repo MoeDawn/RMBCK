@@ -38,7 +38,7 @@ C# WinForms 宿主 + WebView2 前端，用 Windows 自带 csc.exe 编译，WebVi
 | `web/` | 前端资源（`index.html`/`app.css`/`app.js`/`overlay.*`/`viewer.html`/`assets/`） |
 | `lib/` | WebView2 SDK 三文件（随包跟踪） |
 | `tests.cs` | 纯逻辑测试（无框架，`/main:TestRunner`） |
-| `build.bat` | 编译 → `RMBCK 2.0.0.exe`，嵌入 `web/` 资源并把 `lib/` DLL 复制到根目录 |
+| `build.bat` | 编译 → `RMBCK 2.1.0.exe`，嵌入 `web/` 资源并把 `lib/` DLL 复制到根目录 |
 | `test.bat` | 编译并运行纯逻辑测试（不含 MainForm/OverlayForm） |
 | `CHANGELOG.md` | 完整版本历史 |
 | `app.manifest` | UAC 提权 + Common-Controls v6 |

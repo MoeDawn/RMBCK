@@ -4,8 +4,9 @@ set CSC=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe
 if not exist "%CSC%" set CSC=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe
 del /q "RMBCK 1.1.0.exe" 2>nul
 del /q "RMBCK 2.0.0.exe" 2>nul
+del /q "RMBCK 2.1.0.exe" 2>nul
 rem 注意：exe 文件名里的版本号需与 src\Program.cs 的 AssemblyVersion 保持一致，升版本时同步修改
-"%CSC%" /nologo /codepage:65001 /target:winexe /out:"RMBCK 2.0.0.exe" ^
+"%CSC%" /nologo /codepage:65001 /target:winexe /out:"RMBCK 2.1.0.exe" ^
   /win32manifest:app.manifest ^
   /win32icon:icon.ico ^
   /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll ^
@@ -31,4 +32,4 @@ rem 注意：exe 文件名里的版本号需与 src\Program.cs 的 AssemblyVersi
   src\App\WebAssets.cs src\App\Bridge.cs src\App\MainForm.cs src\App\Tray.cs src\App\OverlayForm.cs
 if not %errorlevel%==0 (echo 编译失败 & exit /b 1)
 copy /y lib\*.dll . >nul
-echo 编译成功: RMBCK 2.0.0.exe
+echo 编译成功: RMBCK 2.1.0.exe

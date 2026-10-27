@@ -9,9 +9,9 @@ using Microsoft.Web.WebView2.Core;
 [assembly: AssemblyProduct("右键长按联动器")]
 [assembly: AssemblyTitle("千恋万花安装器(反MC)")]
 [assembly: AssemblyDescription("千恋万花安装器(反MC)")]
-[assembly: AssemblyVersion("2.0.0")]
-[assembly: AssemblyFileVersion("2.0.0")]
-[assembly: AssemblyInformationalVersion("2.0.0")]
+[assembly: AssemblyVersion("2.1.0")]
+[assembly: AssemblyFileVersion("2.1.0")]
+[assembly: AssemblyInformationalVersion("2.1.0")]
 
 class AppRuntime
 {
@@ -152,7 +152,7 @@ static class Bootstrap
 
 class Program
 {
-    const string AppVersion = "2.0.0";
+    const string AppVersion = "2.1.0";
 
     [STAThread]
     static void Main()
