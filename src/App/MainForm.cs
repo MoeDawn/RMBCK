@@ -97,16 +97,18 @@ class MainForm : Form
     Timer _gateTimer;
     bool _wasTriggered;
 
-    // 每次 10ms 轮询触发状态；只在 false -> true 的跃迁上写一条日志（不在每 tick 分配）
+    // 每次 10ms 轮询触发状态；只在 false -> true 的跃迁上写一条日志并构建标签（不在每 tick 分配）
     void OnTickHandler()
     {
         _rt.Ctrl.OnTick(Environment.TickCount);
         bool now = _rt.Ctrl.IsTriggered;
-        // 必须在 OnRightUp / 下一次 OnTick 清空之前复制真正触发的行
-        List<string> fired = now ? new List<string>(_rt.Ctrl.FiredLabels) : null;
+        string hudLabel = null;
         if (now && !_wasTriggered)
         {
+            // 必须在 OnRightUp / 下一次 OnTick 清空之前复制真正触发的行
+            List<string> fired = new List<string>(_rt.Ctrl.FiredLabels);
             string label = fired.Count > 0 ? string.Join("+", fired.ToArray()) : "-";
+            hudLabel = fired.Count > 0 ? string.Join(" ", fired.ToArray()) : "-";
             string proc = string.IsNullOrEmpty(_rt.Settings.TargetProcess) ? ""
                 : (TargetForegroundActive() ? _rt.Settings.TargetProcess : "其他进程");
             _rt.History.Add(label, proc,
@@ -115,11 +117,11 @@ class MainForm : Form
             Send("history", _rt.History.Snapshot());
         }
         _wasTriggered = now;
-        UpdateHud(fired);
+        UpdateHud(hudLabel);
     }
 
     // HUD 只在触发状态跃迁时更新；SuppressHud 开启时立即隐藏已显示的窗口
-    void UpdateHud(List<string> fired)
+    void UpdateHud(string hudLabel)
     {
         if (_rt.Settings.SuppressHud)
         {
@@ -130,8 +132,7 @@ class MainForm : Form
         {
             if (_hudShown) return;
             _hudShown = true;
-            string label = fired != null && fired.Count > 0 ? string.Join(" ", fired.ToArray()) : "-";
-            ShowHud("⚡ " + label);
+            ShowHud("⚡ " + (hudLabel != null ? hudLabel : "-"));
         }
         else if (_hudShown)
         {
@@ -1694,15 +1695,27 @@ class MainForm : Form
         return t;
     }
 
-    // setProfile 来自前端消息，不能信任：先清洗，再必须命中当前目录的真实方案列表
+    // setProfile 来自前端消息，不能信任：只接受当前目录真实存在的方案。
+    // 解析既有方案不做 20 字截断（那是新建时的限制），并按磁盘原始大小写返回。
     bool TryResolveProfileName(string raw, out string resolved)
     {
         resolved = null;
-        string name = SanitizeProfileName(raw);
-        if (name.Length == 0) return false;
-        foreach (string n in ConfigStore.ListProfiles(ProfileDir()))
+        if (raw == null) return false;
+        string wanted = raw.Trim();
+        if (wanted.Length == 0) return false;
+        List<string> list = ConfigStore.ListProfiles(ProfileDir());
+        foreach (string n in list)
         {
-            if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(n, wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                resolved = n;
+                return true;
+            }
+        }
+        // 外部创建的文件名可能带首尾空格：先 trim 再匹配，仍返回磁盘上的原名
+        foreach (string n in list)
+        {
+            if (string.Equals(n.Trim(), wanted, StringComparison.OrdinalIgnoreCase))
             {
                 resolved = n;
                 return true;
