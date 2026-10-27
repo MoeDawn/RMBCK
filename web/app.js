@@ -164,6 +164,37 @@
     return b;
   };
 
+  // 页面重建前记录滚动位置、焦点 id 与文本/数字输入选区，重建后恢复。
+  // 只有“状态确实变化”的页面才重建，避免无谓地销毁用户正在操作的控件。
+  function capturePageState(p) {
+    var a = document.activeElement;
+    var st = { id: "", start: null, end: null, scrollTop: p ? p.scrollTop : 0 };
+    if (a && a.id) st.id = a.id;
+    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) {
+      try {
+        if (typeof a.selectionStart === "number") {
+          st.start = a.selectionStart;
+          st.end = a.selectionEnd;
+        }
+      } catch (e) { }
+    }
+    return st;
+  }
+
+  function restorePageState(p, st) {
+    if (!p || !st) return;
+    p.scrollTop = st.scrollTop || 0;
+    if (!st.id) return;
+    var a = document.getElementById(st.id);
+    if (!a) return;
+    try { a.focus({ preventScroll: true }); } catch (e) {
+      try { a.focus(); } catch (e2) { }
+    }
+    if (st.start != null) {
+      try { a.setSelectionRange(st.start, st.end); } catch (e3) { }
+    }
+  }
+
   // ---------- 按键页 ----------
   var MOD_LABEL = { 1: "Ctrl", 2: "Shift", 4: "Alt", 8: "Win" };
   var MODE_LABEL = { Hold: "保持", TapOnce: "点按·单次", TapRepeat: "点按·连发" };
@@ -333,19 +364,32 @@
   };
 
   // ---------- 概览页 ----------
+  function overviewSignature(s) {
+    return JSON.stringify([
+      s.enabled, s.profiles || [], s.profile, s.longPressMs, s.randomJitter,
+      s.hotkey, !!window.__testing
+    ]);
+  }
+
   window.render_overview = function (s) {
     var p = document.getElementById("page-overview");
     if (!p) return;
+    var sig = overviewSignature(s);
+    if (window.__overviewRenderSig === sig) return;
+    var pageState = capturePageState(p);
     p.innerHTML = "";
 
     // 总开关 + 方案
     var c1 = el("div", "card");
     c1.appendChild(el("h3", null, "联动"));
     var row1 = el("div", "row");
-    row1.appendChild(window.__switch(s.enabled, function (v) { send("toggleEnabled", { enabled: v }); }));
+    var enabledSw = window.__switch(s.enabled, function (v) { send("toggleEnabled", { enabled: v }); });
+    enabledSw.id = "overviewEnabled";
+    row1.appendChild(enabledSw);
     row1.appendChild(el("span", "muted", s.enabled ? "当前联动状态：启用" : "当前联动状态：禁用"));
     row1.appendChild(el("span", "spacer"));
     var sel = el("select");
+    sel.id = "profileSelect";
     var profiles = s.profiles || [];
     var hasCurrent = false;
     profiles.forEach(function (n) {
@@ -364,8 +408,10 @@
     sel.onchange = function () { send("setProfile", { name: sel.value }); };
     row1.appendChild(sel);
     var bNew = el("button", "btn", "＋ 新建");
+    bNew.id = "newProfileBtn";
     bNew.onclick = function () { promptProfileName(); };
     var bDel = el("button", "btnGhost", "－ 删除");
+    bDel.id = "deleteProfileBtn";
     bDel.onclick = function () { confirmDeleteProfile(s.profile); };
     row1.appendChild(bNew);
     row1.appendChild(bDel);
@@ -380,6 +426,7 @@
     row2.appendChild(el("span", "muted", "长按检测时间"));
     var rng = el("input");
     rng.type = "range";
+    rng.id = "longPressRange";
     rng.min = "100";
     rng.max = "2000";
     rng.step = "10";
@@ -387,6 +434,7 @@
     rng.style.width = "260px";
     var num = el("input");
     num.type = "number";
+    num.id = "longPressNumber";
     num.min = "100";
     num.max = "2000";
     num.value = s.longPressMs;
@@ -405,7 +453,9 @@
     row2.appendChild(el("span", "muted", "ms"));
     row2.appendChild(el("span", "spacer"));
     row2.appendChild(el("span", "muted", "随机化防检测"));
-    row2.appendChild(window.__switch(s.randomJitter, function (v) { send("setSetting", { key: "randomJitter", value: v }); }));
+    var jitterSw = window.__switch(s.randomJitter, function (v) { send("setSetting", { key: "randomJitter", value: v }); });
+    jitterSw.id = "randomJitterSwitch";
+    row2.appendChild(jitterSw);
     c2.appendChild(row2);
     p.appendChild(c2);
 
@@ -438,6 +488,8 @@
     lines.appendChild(testTarget);
     c3.appendChild(lines);
     p.appendChild(c3);
+    restorePageState(p, pageState);
+    window.__overviewRenderSig = sig;
   };
 
   // testStatus 每 100ms 到达一次：只更新文本，不重建页面（否则按钮/滑块会被销毁）
@@ -456,9 +508,22 @@
   // ---------- 进程页 ----------
   // 搜索在本地过滤已拉取的数组，不向 C# 发请求；查询串与加载态挂在 window 上，
   // 这样 state/processes 推送触发的重绘不会清掉用户输入或“正在枚举…”提示。
+  function processSignature(s) {
+    return JSON.stringify([
+      s.targetProcess || "", window.__procQuery || "",
+      !!window.__procLoading, !!window.__procFetched, window.__processes || []
+    ]);
+  }
+
   window.render_process = function (s) {
     var p = document.getElementById("page-process");
     if (!p) return;
+    var sig = processSignature(s);
+    if (window.__processRenderSig === sig) return;
+
+    var pageState = capturePageState(p);
+    var prevList = document.getElementById("procListBox");
+    var listScroll = prevList ? prevList.scrollTop : 0;
 
     var prev = document.getElementById("procSearch");
     var hadFocus = !!prev && document.activeElement === prev;
@@ -482,6 +547,7 @@
     refresh.id = "procRefreshBtn";
     refresh.disabled = !!window.__procLoading;
     var clear = el("button", "btnGhost", "清除限制");
+    clear.id = "procClearBtn";
     row.appendChild(search); row.appendChild(refresh); row.appendChild(clear);
     card.appendChild(row);
 
@@ -522,6 +588,8 @@
     search.oninput = function () {
       window.__procQuery = search.value;
       paint();
+      // 本地过滤已生效：同步签名，避免下一次无关 state 推送重建并打断输入
+      window.__processRenderSig = processSignature(s);
     };
     refresh.onclick = function () {
       window.__procLoading = true;
@@ -532,11 +600,15 @@
 
     p.appendChild(card);
     paint();
+    // 重建只换 DOM：恢复列表与页面滚动，选进程后不会跳回顶部
+    listBox.scrollTop = listScroll;
+    restorePageState(p, pageState);
 
     if (hadFocus) {
       search.focus();
       try { search.setSelectionRange(caret, caret); } catch (e) { }
     }
+    window.__processRenderSig = sig;
   };
 
   // ---------- 日志页 ----------
@@ -590,16 +662,31 @@
 
   function settingSwitch(key, on, label) {
     var box = el("label", "modBox");
-    box.appendChild(window.__switch(on, function (v) {
+    var sw = window.__switch(on, function (v) {
       send("setSetting", { key: key, value: v });
-    }));
+    });
+    sw.id = "setting_" + key;
+    box.appendChild(sw);
     box.appendChild(el("span", null, label));
     return box;
+  }
+
+  function settingsSignature(s) {
+    return JSON.stringify([
+      s.hotkey, s.autostart, !!window.__autoBusy,
+      s.blockCtrl, s.blockShift, s.blockAlt, s.blockWin,
+      s.suppressToast, s.suppressEgg, s.suppressHud, s.suppressHotkeyToast,
+      s.theme, s.configFolder,
+      hotkeyCapturing() || !!window.__captureHotkey
+    ]);
   }
 
   window.render_settings = function (s) {
     var p = document.getElementById("page-settings");
     if (!p) return;
+    var sig = settingsSignature(s);
+    if (window.__settingsRenderSig === sig) return;
+    var pageState = capturePageState(p);
     p.innerHTML = "";
 
     var busy = !!window.__autoBusy;
@@ -612,6 +699,7 @@
     var capturing = hotkeyCapturing() || !!window.__captureHotkey;
     var hk = el("button", "hotkeyBtn" + (capturing ? " capturing" : ""),
       capturing ? "请按下组合键…" : (s.hotkey || "未设置"));
+    hk.id = "hotkeyBtn";
     hk.type = "button";
     hk.title = capturing ? "按 Esc 取消" : "点击后按下组合键（须包含 Ctrl/Shift/Alt/Win）";
     hk.onclick = function () {
@@ -641,6 +729,7 @@
       render();
       send("setAutostart", { on: v });
     });
+    auto.id = "autostartSwitch";
     auto.type = "button";
     if (busy) {
       auto.disabled = true;
@@ -675,11 +764,11 @@
     r3.appendChild(settingSwitch("suppressEgg", s.suppressEgg, "彩蛋"));
     r3.appendChild(settingSwitch("suppressHud", s.suppressHud, "HUD 悬浮窗"));
     r3.appendChild(settingSwitch("suppressHotkeyToast", s.suppressHotkeyToast, "热键状态提示"));
-    r3.appendChild(settingSwitch("headerAnim", s.headerAnim, "动态图标"));
     c3.appendChild(r3);
     var r3b = el("div", "row");
     r3b.appendChild(el("span", "muted", "主题"));
     var themeBtn = el("button", "btn", s.theme === "Night" ? "夜间（深色）" : "日间（樱花）");
+    themeBtn.id = "themeToggleBtn";
     themeBtn.type = "button";
     themeBtn.onclick = function () {
       var next = s.theme === "Night" ? "Day" : "Night";
@@ -698,21 +787,25 @@
     r4.appendChild(el("span", "muted", "配置文件位置"));
     var folder = el("input");
     folder.type = "text";
+    folder.id = "configFolderInput";
     folder.readOnly = true;
     folder.value = s.configFolder || "";
     folder.title = s.configFolder || "";
     folder.style.flex = "1";
     r4.appendChild(folder);
     var browse = el("button", "btn", "浏览…");
+    browse.id = "browseFolderBtn";
     browse.type = "button";
     browse.onclick = function () { send("chooseFolder", { which: "config" }); };
     r4.appendChild(browse);
     c4.appendChild(r4);
     var r5 = el("div", "row");
     var fb = el("button", "btnGhost", "报错反馈");
+    fb.id = "feedbackBtn";
     fb.type = "button";
     fb.onclick = function () { showFeedback(); };
     var home = el("button", "btnGhost", "作者主页");
+    home.id = "homepageBtn";
     home.type = "button";
     home.onclick = function () { send("openHomepage", {}); };
     r5.appendChild(fb); r5.appendChild(home);
@@ -722,6 +815,8 @@
     c4.appendChild(el("div", "muted footNote",
       "使用本软件自动视为放弃自身一切权益，一切解释权归作者所有，点击访问作者个人主页"));
     p.appendChild(c4);
+    restorePageState(p, pageState);
+    window.__settingsRenderSig = sig;
   };
 
   function promptProfileName() {
@@ -820,6 +915,9 @@
         state = data;
         window.__state = state;
         window.__autoBusy = !!(data && data.autostartBusy);
+        // 后端进程查询标志（HWND 重建丢失回调时可在下一次 state 推送自愈）
+        if (data && typeof data.processLoading === "boolean")
+          window.__procLoading = data.processLoading;
         render();
       }
       else if (msg.type === "toast") { toast(data && data.text, data && data.kind, data && data.ms); }

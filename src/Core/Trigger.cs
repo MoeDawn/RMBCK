@@ -78,6 +78,9 @@ class TriggerController
 
     public void OnRightDown(long nowMs)
     {
+        // 丢失过一次 WM_RBUTTONUP 时不能直接开新一轮：先释放上一轮仍按住的键，
+        // 否则 _fired 被清空后那些键会永久留在按下状态。
+        if (_triggered) OnRightUp();
         _pressed = true;
         _downTick = nowMs;
         _modifierCancelled = false;

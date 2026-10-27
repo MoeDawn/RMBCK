@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 class HotkeyManager : IDisposable
 {
     public const uint MOD_ALT = 0x0001, MOD_CONTROL = 0x0002, MOD_SHIFT = 0x0004, MOD_WIN = 0x0008;
+    public const uint MOD_NOREPEAT = 0x4000;   // 只作用于 RegisterHotKey，不写入用户可见的 Mods
     public uint Mods;
     public uint Vk;
 
@@ -18,9 +19,11 @@ class HotkeyManager : IDisposable
     public bool Register(IntPtr hwnd, int id, uint mods, uint vk)
     {
         UnregisterHotKey(hwnd, id);
-        if (!RegisterHotKey(hwnd, id, mods, vk))
+        // MOD_NOREPEAT 只加在注册调用上：按住热键时系统不再自动重复，避免联动被连翻
+        if (!RegisterHotKey(hwnd, id, mods | MOD_NOREPEAT, vk))
         {
-            RegisterHotKey(hwnd, id, Mods, Vk);   // 注册失败时恢复原热键
+            // 恢复旧热键；若旧组合也已被占用，Register 仍返回 false，调用方必须保留设置不变
+            RegisterHotKey(hwnd, id, Mods | MOD_NOREPEAT, Vk);
             return false;
         }
         Mods = mods; Vk = vk;

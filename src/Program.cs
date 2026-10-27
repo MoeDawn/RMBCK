@@ -28,6 +28,27 @@ class AppRuntime
 
 static class Bootstrap
 {
+    // 与 MainForm.SanitizeProfileName 等价：保留合法字符、去首尾空白、限长，
+    // 并拒绝 . / .. / config（config 会与指针 config.ini 撞名）。
+    static string SanitizeProfileName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "";
+        char[] bad = Path.GetInvalidFileNameChars();
+        var sb = new System.Text.StringBuilder();
+        foreach (char c in name) if (Array.IndexOf(bad, c) < 0) sb.Append(c);
+        string t = sb.ToString().Trim();
+        if (t.Length > 20) t = t.Substring(0, 20).Trim();
+        if (t.Length == 0 || t == "." || t == ".." || ConfigStore.IsReservedProfileName(t)) return "";
+        return t;
+    }
+
+    static string ResolveExistingProfile(string folder, string name)
+    {
+        foreach (string n in ConfigStore.ListProfiles(folder))
+            if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return n;
+        return null;
+    }
+
     public static AppSettings Load(string exeDir)
     {
         string ptrPath = Path.Combine(exeDir, "config.ini");
@@ -48,8 +69,13 @@ static class Bootstrap
             catch { }
         }
 
+        // Profile 来自可手改的指针文件：先清洗，绝不允许 ../ 或 config 逃逸/撞名
+        string safeProfile = SanitizeProfileName(s.Profile);
+        s.Profile = safeProfile.Length > 0 ? safeProfile : AppSettings.DefaultProfileName;
+
         if (!string.IsNullOrEmpty(s.ConfigFolder) && Directory.Exists(s.ConfigFolder))
         {
+            // 目标方案不存在时，仅在旧版 config.ini 可迁移时创建它；否则回退默认方案
             string profileFile = Path.Combine(s.ConfigFolder, s.Profile + ".ini");
             if (!File.Exists(profileFile))
             {
@@ -63,6 +89,18 @@ static class Bootstrap
                     old.Theme = s.Theme;
                     try { ConfigStore.SaveProfile(old, profileFile); } catch { }
                 }
+            }
+            string resolved = ResolveExistingProfile(s.ConfigFolder, s.Profile);
+            if (resolved == null)
+            {
+                s.Profile = AppSettings.DefaultProfileName;
+                resolved = ResolveExistingProfile(s.ConfigFolder, s.Profile);
+                if (resolved != null) s.Profile = resolved;
+                profileFile = Path.Combine(s.ConfigFolder, s.Profile + ".ini");
+            }
+            else
+            {
+                s.Profile = resolved;   // 使用目录中的真实大小写，避免切换后写出另一份文件
             }
             AppSettings profile = ConfigStore.LoadProfile(profileFile);
             profile.ConfigFolder = s.ConfigFolder;

@@ -32,6 +32,7 @@ class MainForm : Form
     // 托盘与关闭流程
     TrayManager _tray;
     bool _exiting;            // 只有真正退出才允许窗体关闭
+    Form _viewer;             // 全屏报错图片查看器（DoExit 必须能关掉这个模态窗）
 
     // 启动骨架：WebView2 首次启动约 5s，窗口立即显示原生占位内容
     Panel _skeleton;
@@ -101,24 +102,24 @@ class MainForm : Form
     {
         _rt.Ctrl.OnTick(Environment.TickCount);
         bool now = _rt.Ctrl.IsTriggered;
+        // 必须在 OnRightUp / 下一次 OnTick 清空之前复制真正触发的行
+        List<string> fired = now ? new List<string>(_rt.Ctrl.FiredLabels) : null;
         if (now && !_wasTriggered)
         {
-            var names = new List<string>();
-            foreach (var kc in _rt.Settings.Keys)
-                if (kc.Enabled) names.Add(kc.Name);
+            string label = fired.Count > 0 ? string.Join("+", fired.ToArray()) : "-";
             string proc = string.IsNullOrEmpty(_rt.Settings.TargetProcess) ? ""
                 : (TargetForegroundActive() ? _rt.Settings.TargetProcess : "其他进程");
-            _rt.History.Add(names.Count > 0 ? string.Join("+", names.ToArray()) : "-", proc,
+            _rt.History.Add(label, proc,
                 _rt.Settings.RandomJitter ? "随机" : "标准", DateTime.Now);
             // 仅在跃迁上推送（不是周期推送）：日志页打开时即时刷新，其他页面只缓存
             Send("history", _rt.History.Snapshot());
         }
         _wasTriggered = now;
-        UpdateHud();
+        UpdateHud(fired);
     }
 
     // HUD 只在触发状态跃迁时更新；SuppressHud 开启时立即隐藏已显示的窗口
-    void UpdateHud()
+    void UpdateHud(List<string> fired)
     {
         if (_rt.Settings.SuppressHud)
         {
@@ -129,10 +130,8 @@ class MainForm : Form
         {
             if (_hudShown) return;
             _hudShown = true;
-            var names = new List<string>();
-            foreach (var kc in _rt.Settings.Keys)
-                if (kc.Enabled) names.Add(kc.Name);
-            ShowHud("⚡ " + string.Join(" ", names.ToArray()));
+            string label = fired != null && fired.Count > 0 ? string.Join(" ", fired.ToArray()) : "-";
+            ShowHud("⚡ " + label);
         }
         else if (_hudShown)
         {
@@ -261,7 +260,17 @@ class MainForm : Form
             core.Settings.IsStatusBarEnabled = false;
             core.NewWindowRequested += delegate(object s, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; };
             core.SetVirtualHostNameToFolderMapping("rmbck.local", _rt.WebDir, CoreWebView2HostResourceAccessKind.Allow);
-            core.NavigationStarting += delegate { _pageReady = false; };
+            core.NavigationStarting += delegate
+            {
+                // 页面重载后旧页面不再能接收消息：未完成状态一律作废，
+                // 并撤销依赖页面的测试轮询 / 全局按键捕获，避免后台永久运行。
+                _ready = false;
+                _pageReady = false;
+                _testing = false;
+                try { if (_testTimer != null) _testTimer.Stop(); } catch { }
+                if (_capturing) CancelCapture();
+                _procLoading = false;
+            };
             core.WebMessageReceived += delegate(object s, CoreWebView2WebMessageReceivedEventArgs e)
             {
                 string json = null;
@@ -288,7 +297,8 @@ class MainForm : Form
                     ShowRealPage();          // 首次导航完成：一次性换掉原生骨架
                 }
                 _ready = true;
-                if (_pageReady) PushState();
+                // 唯一能自愈的消息：无论页面是否已经发过 ready 都重发一次
+                PushState();
             };
             RefreshAutostartAsync();
             core.Navigate("https://rmbck.local/index.html");
@@ -330,6 +340,7 @@ class MainForm : Form
             d["hotkey"] = HotkeyManager.Describe(s.HotkeyMods, s.HotkeyVk);
             d["autostart"] = _autostartCached;
             d["autostartBusy"] = _autostartBusy;
+            d["processLoading"] = _procLoading;
             d["eggBoost"] = s.EggBoost;
             var arr = new List<object>();
             for (int i = 0; i < s.Keys.Count; i++)
@@ -384,6 +395,8 @@ class MainForm : Form
             }
             catch
             {
+                // 窗体句柄已被 ShowInTaskbar 重建且 BeginInvoke 丢失：必须自行清掉忙碌标志，
+                // 否则后续查询会被 if (_autostartRefreshing) 永久挡住。
                 _autostartRefreshing = false;
             }
         });
@@ -538,9 +551,13 @@ class MainForm : Form
 
         if (a == "ready")
         {
-            _pageReady = true;
-            PushState();
-            RefreshAutostartAsync();
+            // 同一轮导航只处理一次；重载时 NavigationStarting 会把标志清回 false
+            if (!_pageReady)
+            {
+                _pageReady = true;
+                PushState();
+                RefreshAutostartAsync();
+            }
             return;
         }
 
@@ -607,7 +624,12 @@ class MainForm : Form
                             PushState();
                         });
                     }
-                    catch { }
+                    catch
+                    {
+                        // 回 UI 线程失败（句柄重建）：清掉本 worker 持有的忙碌标志，避免开关永久卡死
+                        _autostartBusy = false;
+                        _autostartGen++;
+                    }
                 }
             });
             return;
@@ -667,8 +689,14 @@ class MainForm : Form
         }
         if (a == "setProfile")
         {
-            string name = Bridge.GetStr(m.Args, "name", "");
-            if (name.Length > 0 && name != s.Profile) SwitchProfile(name);
+            string resolved;
+            if (!TryResolveProfileName(Bridge.GetStr(m.Args, "name", ""), out resolved))
+            {
+                ShowToast("方案不存在", "err", 1800);
+                PushState();   // 让下拉框回到真实方案，不保留伪造值
+                return;
+            }
+            if (!string.Equals(resolved, s.Profile, StringComparison.OrdinalIgnoreCase)) SwitchProfile(resolved);
             return;
         }
         if (a == "newProfile") { NewProfile(Bridge.GetStr(m.Args, "name", "")); return; }
@@ -814,11 +842,13 @@ class MainForm : Form
     // GetProcesses + 每进程 MainWindowTitle 需要 100ms~2s，绝不能在 UI 线程执行：
     // 线程池收集 → BeginInvoke 回传；_procGen 丢弃被后续刷新取代的过期结果。
     int _procGen;
+    bool _procLoading;
 
     void PopulateProcesses()
     {
         int gen = ++_procGen;
         string sel = _rt.Settings.TargetProcess;
+        _procLoading = true;
         System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
         {
             List<ProcessItem> list = CollectProcesses();
@@ -827,10 +857,15 @@ class MainForm : Form
                 BeginInvoke((MethodInvoker)delegate
                 {
                     if (gen != _procGen || IsDisposed) return;
+                    _procLoading = false;
                     ApplyProcessList(list, sel);
                 });
             }
-            catch { }
+            catch
+            {
+                // 句柄重建导致回传失败：清掉本代加载标志，前端下一次 state 推送即恢复
+                if (gen == _procGen) _procLoading = false;
+            }
         });
     }
 
@@ -1121,19 +1156,23 @@ class MainForm : Form
         catch { return false; }
     }
 
-    // 方案切换后热键可能不同：先释放旧注册再注册新的；失败则回退到实际仍生效的旧热键
+    // 方案切换后热键可能不同：先释放旧注册再注册新的；失败时保留设置原值（不回写管理器里的旧值，
+    // 因为旧组合的恢复也可能失败），由 PushState 统一提示。
     void ApplyHotkeyFromSettings()
     {
         if (_hotkey == null) return;
         var s = _rt.Settings;
         if (_hotkey.Mods == s.HotkeyMods && _hotkey.Vk == s.HotkeyVk) return;
-        try
+        bool ok = false;
+        try { ok = _hotkey.Register(Handle, HotkeyId, s.HotkeyMods, s.HotkeyVk); } catch { }
+        if (ok)
         {
-            if (_hotkey.Register(Handle, HotkeyId, s.HotkeyMods, s.HotkeyVk)) { _hotkeyFailed = false; return; }
+            _hotkeyFailed = false;
+            // 只有注册成功时才把实际生效值同步回设置；失败路径绝不改动 Settings
+            s.HotkeyMods = _hotkey.Mods;
+            s.HotkeyVk = _hotkey.Vk;
+            return;
         }
-        catch { }
-        s.HotkeyMods = _hotkey.Mods;
-        s.HotkeyVk = _hotkey.Vk;
         _hotkeyFailed = true;
     }
 
@@ -1378,6 +1417,7 @@ class MainForm : Form
         try
         {
             viewer = new Form();
+            _viewer = viewer;
             viewer.Text = "报错反馈";
             viewer.FormBorderStyle = FormBorderStyle.None;
             viewer.StartPosition = FormStartPosition.Manual;
@@ -1394,11 +1434,17 @@ class MainForm : Form
             Form owner = viewer;
             viewer.Load += delegate { InitViewerAsync(owner, wv); };
             viewer.Shown += delegate { try { wv.Focus(); } catch { } };
+            viewer.FormClosed += delegate
+            {
+                if (object.ReferenceEquals(_viewer, owner)) _viewer = null;
+                _feedbackBusy = false;   // 用户 Esc / 点关闭后允许下次再次提交反馈
+            };
             viewer.KeyDown += delegate(object s2, KeyEventArgs e2)
             {
                 if (e2.KeyCode == Keys.Escape) CloseViewer(owner);
             };
             viewer.ShowDialog(this);
+            if (object.ReferenceEquals(_viewer, viewer)) _viewer = null;
             viewer.Dispose();
             viewer = null;
             _feedbackBusy = false;
@@ -1406,10 +1452,21 @@ class MainForm : Form
         catch
         {
             bool gone = viewer != null && ViewerGone(viewer);
+            if (object.ReferenceEquals(_viewer, viewer)) _viewer = null;
             if (viewer != null) { try { viewer.Dispose(); } catch { } }
             _feedbackBusy = false;
             if (!gone) ShowToast("无法显示报错图片", "err", 2200);
         }
+    }
+
+    // DoExit / 主窗体关闭时必须结束全屏模态查看器，否则进程会被它一直挂住
+    void CloseErrorViewer()
+    {
+        Form viewer = _viewer;
+        _viewer = null;
+        _feedbackBusy = false;
+        if (viewer == null || viewer.IsDisposed || viewer.Disposing) return;
+        try { viewer.Close(); } catch { }
     }
 
     async void InitViewerAsync(Form owner, WebView2 wv)
@@ -1631,8 +1688,27 @@ class MainForm : Form
         var sb = new StringBuilder();
         foreach (char c in name) if (Array.IndexOf(bad, c) < 0) sb.Append(c);
         string t = sb.ToString().Trim();
-        if (t.Length > 20) t = t.Substring(0, 20);
+        if (t.Length > 20) t = t.Substring(0, 20).Trim();
+        // config 与指针 config.ini 撞名；. / .. 是路径穿越边界，全部按“空名称”拒绝
+        if (t.Length == 0 || t == "." || t == ".." || ConfigStore.IsReservedProfileName(t)) return "";
         return t;
+    }
+
+    // setProfile 来自前端消息，不能信任：先清洗，再必须命中当前目录的真实方案列表
+    bool TryResolveProfileName(string raw, out string resolved)
+    {
+        resolved = null;
+        string name = SanitizeProfileName(raw);
+        if (name.Length == 0) return false;
+        foreach (string n in ConfigStore.ListProfiles(ProfileDir()))
+        {
+            if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase))
+            {
+                resolved = n;
+                return true;
+            }
+        }
+        return false;
     }
 
     void PopulateProfileComboIfNeeded()
@@ -1812,7 +1888,15 @@ class MainForm : Form
             DwmSetWindowAttribute(Handle, 33, ref pref, sizeof(int));
         }
         catch { }
+        // ShowInTaskbar 切换会重建 HWND：旧句柄上排队的 BeginInvoke 会全部丢失，
+        // 在途 worker 的标志必须在这里兜底复位，否则开关/刷新会永久卡在忙碌态。
+        _autostartBusy = false;
+        _autostartRefreshing = false;
+        _autostartGen++;
+        _procLoading = false;
+        _procGen++;
         InitHotkey();   // 全局热键必须等窗口句柄存在后才能注册
+        try { PushState(); } catch { }
     }
 
     // ---- 托盘与关闭流程 ----
@@ -1895,6 +1979,10 @@ class MainForm : Form
         if (_exiting) return;
         _exiting = true;
 
+        // 先释放可能仍被按住的主键/修饰键，再拆任何窗口：
+        // 否则托盘退出时 Q 等键会在系统层面保持按下，直到用户再次点按。
+        try { _rt.Ctrl.SetEnabled(false); } catch { }
+        CloseErrorViewer();
         CancelCapture();
         SaveSettingsNow();
 
@@ -1917,6 +2005,14 @@ class MainForm : Form
         CancelCapture();      // 关闭/最小化前撤销进行中的捕获
         SaveSettingsNow();    // 防抖静默期内关窗不丢数据
         var s = _rt.Settings;
+        if (!_ready)
+        {
+            // WebView2 冷启动期间 Send("askClose") 会被丢弃：不能把用户锁在无法关闭的窗口里
+            if (s.CloseAction == "Minimize") { MinimizeToTray(); return; }
+            ShowToast("界面尚未就绪，正在退出", "err", 1600);
+            DoExit();
+            return;
+        }
         if (s.CloseAction == "Minimize") { MinimizeToTray(); return; }
         if (s.CloseAction == "Exit") { DoExit(); return; }
         // 网页模态框可被 Esc/遮罩关闭且不会通知后端；每次关闭请求都重新发送，
@@ -1938,6 +2034,7 @@ class MainForm : Form
         if (_exiting)
         {
             // 只有真正退出才释放全局热键；取消关闭/最小化到托盘时绝不能释放
+            try { _rt.Ctrl.SetEnabled(false); } catch { }
             if (_capturing) EndCapture();
             ReleaseHotkey();
             base.OnFormClosing(e);
@@ -1950,6 +2047,7 @@ class MainForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        CloseErrorViewer();
         try { if (_tick != null) { _tick.Stop(); _tick.Dispose(); } } catch { }
         try { if (_gateTimer != null) { _gateTimer.Stop(); _gateTimer.Dispose(); } } catch { }
         try { if (_testTimer != null) { _testTimer.Stop(); _testTimer.Dispose(); } } catch { }

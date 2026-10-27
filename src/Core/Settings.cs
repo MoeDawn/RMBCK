@@ -19,6 +19,7 @@ class KeyConfig
 class AppSettings
 {
     public const string DefaultProfileName = "默认";
+    public const string ReservedProfileName = "config";   // 与指针文件 config.ini 同名，绝不能作为方案名
 
     public int LongPressMs = 300;
     public string ConfigFolder = "";
@@ -121,7 +122,8 @@ static class ConfigStore
                 else if (section.StartsWith("Key"))
                 {
                     int idx;
-                    if (!int.TryParse(section.Substring(3), out idx) || idx < 1) continue;
+                    // 上限防损坏配置伪造 [Key999999] 时分配上百万行
+                    if (!int.TryParse(section.Substring(3), out idx) || idx < 1 || idx > 200) continue;
                     while (s.Keys.Count < idx) s.Keys.Add(new KeyConfig());
                     var kc = s.Keys[idx - 1];
                     int n; bool b;
@@ -186,6 +188,14 @@ static class ConfigStore
         File.WriteAllText(path, text);
     }
 
+    // 方案名 "config" 在 ConfigFolder==exeDir 时会与指针文件 config.ini 撞名；
+    // 这里作为共享纯函数，供 UI / 启动恢复 / 测试共同校验。
+    public static bool IsReservedProfileName(string name)
+    {
+        if (name == null) return false;
+        return string.Equals(name.Trim(), AppSettings.ReservedProfileName, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static List<string> ListProfiles(string folder)
     {
         var list = new List<string>();
@@ -195,7 +205,7 @@ static class ConfigStore
             foreach (string f in Directory.GetFiles(folder, "*.ini"))
             {
                 string name = Path.GetFileNameWithoutExtension(f);
-                if (string.Equals(name, "config", StringComparison.OrdinalIgnoreCase)) continue;
+                if (IsReservedProfileName(name)) continue;
                 if (name.Length > 0) list.Add(name);
             }
         }

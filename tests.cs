@@ -118,6 +118,12 @@ class TestRunner
             Assert(ptr2.CloseAction == "Minimize", "指针文件往返 CloseAction");
 
             Assert(ConfigStore.ListProfiles(tmp).Contains("默认"), "ListProfiles 列出方案");
+            Assert(!ConfigStore.ListProfiles(tmp).Contains("config"), "ListProfiles 跳过指针文件 config.ini");
+            Assert(ConfigStore.IsReservedProfileName("config"), "保留名 config 被识别");
+            Assert(ConfigStore.IsReservedProfileName("CONFIG"), "保留名大小写不敏感");
+            Assert(ConfigStore.IsReservedProfileName(" Config "), "保留名首尾空白归一化");
+            Assert(!ConfigStore.IsReservedProfileName("默认"), "默认方案名不是保留名");
+            Assert(!ConfigStore.IsReservedProfileName("config2"), "config2 不是保留名");
             ConfigStore.DeleteProfile(tmp, "默认");
             Assert(!File.Exists(p), "DeleteProfile 删除方案文件");
 
@@ -125,6 +131,11 @@ class TestRunner
             Assert(ConfigStore.IsOldFormat(pp), "旧格式检测 IsOldFormat=true");
             File.WriteAllText(pp, "[General]\nConfigFolder=" + tmp + "\nProfile=默认\nCloseAction=Ask\n");
             Assert(!ConfigStore.IsOldFormat(pp), "新指针格式 IsOldFormat=false");
+
+            // 损坏/恶意配置的超大 [KeyN] 不得分配几十万行
+            File.WriteAllText(Path.Combine(tmp, "超限.ini"), "[General]\n[Key500]\nName=Q\n");
+            var capped = ConfigStore.LoadProfile(Path.Combine(tmp, "超限.ini"));
+            Assert(capped.Keys.Count <= 200, "Key500 被上限拦截（实际 " + capped.Keys.Count + " 行）");
 
             File.WriteAllText(Path.Combine(tmp, "坏.ini"), "[[[\nnot-a-key=[[[");
             var s3 = ConfigStore.LoadProfile(Path.Combine(tmp, "坏.ini"));
@@ -209,8 +220,25 @@ class TestRunner
         Assert(rec7.Calls.Count == 1 && rec7.Calls[0] == "D81", "触发中(已按下Q)");
         c7.SetEnabled(false);
         Assert(rec7.Calls.Count == 2 && rec7.Calls[1] == "U81", "触发中停用 -> 立即 KeyUp Q");
+        Assert(!c7.IsTriggered, "停用释放后 IsTriggered=false");
+        c7.SetEnabled(false);
+        Assert(rec7.Calls.Count == 2, "重复 SetEnabled(false) 幂等，不重复 KeyUp");
         c7.OnTick(310);
         Assert(rec7.Calls.Count == 2, "停用后不再下发按键");
+
+        // 丢失 WM_RBUTTONUP：下一次按下必须先释放上一轮，再重新触发
+        var recLost = new RecordingKeySender();
+        var cLost = new TriggerController(recLost, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold } }, 300, true);
+        cLost.OnRightDown(0); cLost.OnTick(300);
+        Assert(recLost.Calls.Count == 1 && recLost.Calls[0] == "D81", "丢失抬起前第一轮已按下 Q");
+        cLost.OnRightDown(1000);   // 没有 OnRightUp
+        Assert(recLost.Calls.Count == 2 && recLost.Calls[1] == "U81", "新一轮按下先释放上一轮 Q");
+        Assert(!cLost.IsTriggered, "自动释放后回到未触发态");
+        cLost.OnTick(1300);
+        Assert(recLost.Calls.Count == 3 && recLost.Calls[2] == "D81", "新一轮按阈值重新触发 Q");
+        cLost.OnRightUp();
+        Assert(recLost.Calls.Count == 4 && recLost.Calls[3] == "U81", "新一轮正常松开");
 
         var rec8 = new RecordingKeySender();
         var c8 = new TriggerController(rec8, new List<KeyConfig> { new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold } }, 500, true);
@@ -338,6 +366,17 @@ class TestRunner
         Assert(d6.FiredLabels.Count == 1 && d6.FiredLabels[0].IndexOf("Q") >= 0, "触发后 FiredLabels 含 Q");
         d6.OnRightUp();
         Assert(d6.FiredLabels.Count == 0, "松开后 FiredLabels 清空");
+
+        // 只有真正到点触发的行才进入 FiredLabels（延迟未到的行不冒充已触发）
+        var r6b = new RecordingKeySender();
+        var d6b = new TriggerController(r6b, new List<KeyConfig> {
+            new KeyConfig { Enabled = true, Name = "Q", Vk = 0x51, Mode = KeyMode.Hold, DelayMs = 0 },
+            new KeyConfig { Enabled = true, Name = "E", Vk = 0x45, Mode = KeyMode.Hold, DelayMs = 2000 } }, 300, true);
+        d6b.OnRightDown(0); d6b.OnTick(300);
+        Assert(d6b.FiredLabels.Count == 1, "FiredLabels 只含已触发行（共 " + d6b.FiredLabels.Count + "）");
+        Assert(d6b.FiredLabels[0].IndexOf("Q") >= 0 && d6b.FiredLabels[0].IndexOf("E") < 0,
+            "延迟 2000ms 的 E 行未出现在 FiredLabels");
+        d6b.OnRightUp();
 
         // 仅已触发的 Hold 行才保留修饰键（未到延迟的 Hold 行不得扣住修饰键）
         var r7 = new RecordingKeySender();
@@ -658,6 +697,11 @@ class TestRunner
         Assert(!HotkeyManager.IsValid(0x0002, 0xA2), "左右修饰键作为主键无效");
         Assert(HotkeyManager.IsValid(0x0002, 0x7B), "Ctrl+F12 有效");
         Assert(HotkeyManager.IsValid(0x0006, 0x51), "Ctrl+Shift+Q 有效");
+        Assert(HotkeyManager.MOD_NOREPEAT == 0x4000, "MOD_NOREPEAT 常量为 0x4000");
+        Assert(HotkeyManager.Describe(HotkeyManager.MOD_CONTROL | HotkeyManager.MOD_NOREPEAT, 0x7B) == "Ctrl+F12",
+            "Describe 忽略注册专用的 MOD_NOREPEAT");
+        Assert(HotkeyManager.IsValid(HotkeyManager.MOD_CONTROL | HotkeyManager.MOD_NOREPEAT, 0x7B),
+            "IsValid 接受带 MOD_NOREPEAT 的有效组合");
     }
 }
 
